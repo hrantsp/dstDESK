@@ -1,0 +1,12 @@
+build/
+out/
+
+# Conan
+CMakeUserPresets.json
+conan_toolchain.cmake
+conanbuild*
+conanrun*
+
+.env
+*.log
+.DS_Store
