@@ -6,7 +6,7 @@ It receives microphone and tab audio as separate streams from the
 and renders them as a live conversation with the two speakers kept apart.
 
 `dstDESK` is the server: it owns the wire protocol, which is specified in
-[`protocol/`](protocol/).
+[`rec/`](rec/).
 
 Built and versioned by [`dstOMNI`](https://github.com/hrantsp/dstOMNI) — see that
 repository for the workspace layout and build instructions.

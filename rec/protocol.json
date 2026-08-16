@@ -1,0 +1,49 @@
+{
+  "$comment": [
+    "Machine-readable source of truth for the dst wire protocol.",
+    "PROTOCOL.md is the normative prose; this file is what the generator reads.",
+    "Change them together — generate.py --check fails the build if they disagree.",
+    "Never hand-edit generated output in either repository."
+  ],
+
+  "protocolVersion": 1,
+
+  "audio": {
+    "sampleRate": 16000,
+    "frameSamples": 512,
+    "channels": 1,
+    "encoding": "pcm_s16le",
+    "$comment": "16 kHz mono PCM16 is exactly Deepgram linear16, so nothing transcodes."
+  },
+
+  "frame": {
+    "headerBytes": 12,
+    "byteOrder": "little",
+    "fields": [
+      { "name": "version",      "type": "u8",  "offset": 0 },
+      { "name": "stream",       "type": "u8",  "offset": 1 },
+      { "name": "frameSamples", "type": "u16", "offset": 2 },
+      { "name": "sampleIndex",  "type": "u32", "offset": 4 },
+      { "name": "flags",        "type": "u32", "offset": 8 }
+    ]
+  },
+
+  "streams": [
+    { "name": "mic", "value": 0, "label": "Microphone" },
+    { "name": "tab", "value": 1, "label": "Meeting" }
+  ],
+
+  "transport": {
+    "defaultPort": 8765,
+    "bindAddress": "127.0.0.1"
+  },
+
+  "errorCodes": [
+    { "code": "handshake-expected",       "close": 4001 },
+    { "code": "protocol-version-mismatch","close": 4001 },
+    { "code": "unsupported-audio-format", "close": 4001 },
+    { "code": "unauthorized-origin",      "close": 4002 },
+    { "code": "invalid-token",            "close": 4002 },
+    { "code": "malformed-frame",          "close": 4003 }
+  ]
+}
