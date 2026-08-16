@@ -33,12 +33,23 @@ public:
   void write       (std::span<const std::int16_t> samples);
   void writeSilence(std::size_t samples);
 
+  // Patches the RIFF sizes in place and flushes, without closing.
+  //
+  // A WAV whose sizes are still zero is unplayable no matter how much audio sits
+  // behind the header, so a process that is killed — Ctrl-C, a crash, a lost power
+  // cable — would otherwise leave the whole recording unreadable. Called
+  // periodically, this costs two seeks and eight bytes and bounds the loss to
+  // whatever arrived since the last call.
+  bool flush();
+
   bool close();
 
   std::uint64_t                samplesWritten() const { return samplesWritten_; }
-  const std::filesystem::path& path()           const { return path_; }
+  const std::filesystem::path& path          () const { return path_; }
 
 private:
+  void patchSizes();
+
   std::filesystem::path path_;
   std::ofstream         file_;
   std::uint32_t         sampleRate_     = 0;

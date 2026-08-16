@@ -76,10 +76,8 @@ void WavWriter::writeSilence(std::size_t samples)
   samplesWritten_ += samples;
 }
 
-bool WavWriter::close()
+void WavWriter::patchSizes()
 {
-  if (!file_.is_open()) return true;
-
   const std::uint64_t dataBytes = samplesWritten_ * 2;
 
   file_.seekp(kDataSizeOffset, std::ios::beg);
@@ -87,6 +85,28 @@ bool WavWriter::close()
 
   file_.seekp(kRiffSizeOffset, std::ios::beg);
   writeU32(file_, static_cast<std::uint32_t>(kWavHeaderBytes - 8 + dataBytes));
+}
+
+bool WavWriter::flush()
+{
+  if (!file_.is_open()) return true;
+
+  // Remember where the audio ends, patch the header, then carry on from where we
+  // left off — seeking to the header and forgetting to return would overwrite the
+  // recording with itself.
+  const auto resumeAt = file_.tellp();
+  patchSizes();
+  file_.seekp(resumeAt, std::ios::beg);
+  file_.flush();
+
+  return static_cast<bool>(file_);
+}
+
+bool WavWriter::close()
+{
+  if (!file_.is_open()) return true;
+
+  patchSizes();
 
   const bool ok = static_cast<bool>(file_);
   file_.close();

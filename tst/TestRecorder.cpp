@@ -122,6 +122,34 @@ TEST_CASE("out-of-order frames are rejected rather than replayed", "[recorder]")
   CHECK(rec.stats().frames   == 1);
 }
 
+TEST_CASE("a recording is playable before it is closed", "[recorder]")
+{
+  // The property that matters when a process is killed: a RIFF header still claiming
+  // zero bytes makes the whole file unreadable however much audio sits behind it. The
+  // sizes are therefore patched periodically, not only on close.
+  const auto path = tempWav("midflight.wav");
+  auto rec = StreamRecorder{};
+  REQUIRE(rec.open(path, kSampleRate));
+
+  const auto samples = std::vector<std::int16_t>(kFrameSamples, 7);
+  for (std::uint32_t ii = 0; ii < 40; ++ii)
+  {
+    REQUIRE(rec.accept(header(ii * kFrameSamples, kFrameSamples), samples));
+  }
+
+  // Deliberately not closed.
+  const auto bytes = readAll(path);
+  REQUIRE(bytes.size() >= 44);
+
+  const std::uint32_t riffSize = readU32(bytes, 4);
+  const std::uint32_t dataSize = readU32(bytes, 40);
+
+  CHECK(dataSize > 0);
+  CHECK(riffSize == dataSize + 36);
+  CHECK(dataSize <= 40u * kFrameSamples * 2);   // never claims more than was written
+  CHECK(dataSize + 44 <= bytes.size());         // and never more than the file holds
+}
+
 TEST_CASE("a stream starting late does not pad from zero", "[recorder]")
 {
   // sampleIndex comes from a clock shared with the other stream, so a stream that

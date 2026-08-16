@@ -37,6 +37,7 @@ public:
     sampleRate_   = sampleRate;
     stats_        = Stats{};
     nextExpected_ = 0;
+    sinceFlush_   = 0;
     return wav_.open(path, sampleRate, 1);
   }
 
@@ -77,6 +78,16 @@ public:
     stats_.lastSampleIndex  = header.sampleIndex;
     nextExpected_           = header.sampleIndex + header.frameSamples;
     ++stats_.frames;
+
+    // Keep the file playable as it grows. Without this, a process killed mid-session
+    // leaves a header claiming zero bytes, and the whole recording is unreadable
+    // however much audio is actually on disk.
+    if (++sinceFlush_ >= kFlushEveryFrames)
+    {
+      sinceFlush_ = 0;
+      wav_.flush();
+    }
+
     return true;
   }
 
@@ -91,9 +102,13 @@ public:
   }
 
 private:
+  // Roughly one second of audio at the protocol's frame rate.
+  static constexpr std::uint32_t kFlushEveryFrames = 32;
+
   WavWriter     wav_;
   std::uint32_t sampleRate_   = 0;
   std::uint32_t nextExpected_ = 0;
+  std::uint32_t sinceFlush_   = 0;
   Stats         stats_        = {};
 };
 

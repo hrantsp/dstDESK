@@ -2,9 +2,40 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QTextStream>
+#include <QTimer>
+#include <csignal>
 #include "Core/Protocol.hpp"
 #include "IO/WsServer.hpp"
 #include "SelfTest.hpp"
+
+namespace {
+
+volatile std::sig_atomic_t gInterrupted = 0;
+
+extern "C" void onSignal(int) { gInterrupted = 1; }
+
+// Ctrl-C otherwise terminates the process without unwinding the stack, so no
+// destructor runs and the recordings are left with an unpatched RIFF header — real
+// audio on disk that no player will open.
+//
+// A signal handler may do almost nothing safely, so it only sets a flag; a timer in
+// the event loop notices and asks the application to quit, which unwinds normally.
+void installSignalHandlers()
+{
+  std::signal(SIGINT , onSignal);
+  std::signal(SIGTERM, onSignal);
+
+  auto* poll = new QTimer(QCoreApplication::instance());
+  QObject::connect(poll, &QTimer::timeout, []
+  {
+    if (gInterrupted == 0) return;
+    QTextStream(stdout) << "\nInterrupted — closing recordings." << Qt::endl;
+    QCoreApplication::quit();
+  });
+  poll->start(100);
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -85,5 +116,6 @@ int main(int argc, char** argv)
   auto server = DST::DESK::IO::WsServer(std::move(cfg));
   if (!server.start()) return 1;
 
+  installSignalHandlers();
   return app.exec();
 }
