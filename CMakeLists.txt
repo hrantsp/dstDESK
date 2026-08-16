@@ -83,7 +83,8 @@ set(CMAKE_AUTOMOC ON)
 
 add_executable(dstdesk
     src/App/main.cpp
-    src/App/SelfTest.cpp)
+    src/App/SelfTest.cpp
+    src/IO/WsServer.cpp)
 
 target_include_directories(dstdesk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
 
@@ -97,6 +98,28 @@ if(MSVC)
     target_compile_options(dstdesk PRIVATE /W4)
 else()
     target_compile_options(dstdesk PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# ── Simulator ────────────────────────────────────────────────────────────────
+# A separate executable, not a mode of dstdesk. It is a client of the protocol —
+# its real counterpart is a browser — and keeping it apart stops the server's
+# command line carrying options that only apply when it is not a server.
+add_executable(dstsim
+    src/Sim/main.cpp
+    src/Sim/Simulate.cpp)
+
+target_include_directories(dstsim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/Sim)
+
+target_link_libraries(dstsim PRIVATE
+    dstdesk_core
+    Qt6::Core
+    Qt6::Network
+    Qt6::WebSockets)
+
+if(MSVC)
+    target_compile_options(dstsim PRIVATE /W4)
+else()
+    target_compile_options(dstsim PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────
