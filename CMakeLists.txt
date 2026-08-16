@@ -84,7 +84,8 @@ set(CMAKE_AUTOMOC ON)
 add_executable(dstdesk
     src/App/main.cpp
     src/App/SelfTest.cpp
-    src/IO/WsServer.cpp)
+    src/IO/WsServer.cpp
+    src/IO/SttClient.cpp)
 
 target_include_directories(dstdesk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
 
@@ -129,7 +130,8 @@ if(DSTDESK_BUILD_TESTS)
 
     add_executable(dstdesk_tests
         tst/TestFrame.cpp
-        tst/TestRecorder.cpp)
+        tst/TestRecorder.cpp
+        tst/TestTranscript.cpp)
     target_link_libraries(dstdesk_tests PRIVATE dstdesk_core Catch2::Catch2WithMain)
 
     include(Catch)

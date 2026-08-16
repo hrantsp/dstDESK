@@ -39,6 +39,26 @@ int main(int argc, char** argv)
       QStringLiteral("Drop a run of meeting frames midway, so gap padding can be "
                      "observed rather than assumed."));
 
+  const auto micOption = QCommandLineOption(
+      QStringLiteral("mic"),
+      QStringLiteral("WAV to send on the microphone stream (16 kHz mono 16-bit). "
+                     "Without it, a 440 Hz tone is sent."),
+      QStringLiteral("file"));
+
+  const auto meetingOption = QCommandLineOption(
+      QStringLiteral("meeting"),
+      QStringLiteral("WAV to send on the meeting stream. Without it, a 660 Hz tone."),
+      QStringLiteral("file"));
+
+  const auto offsetOption = QCommandLineOption(
+      QStringLiteral("offset"),
+      QStringLiteral("Seconds to delay the meeting stream, so the two overlap the way "
+                     "a conversation does."),
+      QStringLiteral("n"), QStringLiteral("0"));
+
+  parser.addOption(micOption);
+  parser.addOption(meetingOption);
+  parser.addOption(offsetOption);
   parser.addOption(portOption);
   parser.addOption(tokenOption);
   parser.addOption(secondsOption);
@@ -59,6 +79,9 @@ int main(int argc, char** argv)
   cfg.token     = parser.value(tokenOption);
   cfg.seconds   = parser.value(secondsOption).toDouble();
   cfg.injectGap = parser.isSet(gapOption);
+  cfg.micFile   = parser.value(micOption);
+  cfg.tabFile   = parser.value(meetingOption);
+  cfg.tabOffset = parser.value(offsetOption).toDouble();
 
   if (cfg.seconds <= 0.0)
   {

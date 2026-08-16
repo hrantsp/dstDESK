@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QTextStream>
+#include <QProcessEnvironment>
 #include <QTimer>
 #include <csignal>
 #include "Core/Protocol.hpp"
@@ -67,6 +68,20 @@ int main(int argc, char** argv)
       QStringLiteral("token"), QStringLiteral("Shared secret the client must present."),
       QStringLiteral("secret"), QString());
 
+  const auto noTranscribeOption = QCommandLineOption(
+      QStringLiteral("no-transcribe"),
+      QStringLiteral("Record only, even when DEEPGRAM_API_KEY is set."));
+
+  const auto modelOption = QCommandLineOption(
+      QStringLiteral("model"), QStringLiteral("Transcription model."),
+      QStringLiteral("name"), QStringLiteral("nova-3"));
+
+  const auto diarizeOption = QCommandLineOption(
+      QStringLiteral("diarize"),
+      QStringLiteral("Ask the engine to label speakers within the meeting stream. It "
+                     "separates distinct voices well and similar ones poorly, so it "
+                     "refines the transcript rather than defining it."));
+
   const auto originOption = QCommandLineOption(
       QStringLiteral("origin"),
       QStringLiteral("Allowed Origin header, repeatable. Any origin is accepted when "
@@ -78,6 +93,9 @@ int main(int argc, char** argv)
   parser.addOption(outputOption);
   parser.addOption(tokenOption);
   parser.addOption(originOption);
+  parser.addOption(noTranscribeOption);
+  parser.addOption(modelOption);
+  parser.addOption(diarizeOption);
   parser.process(app);
 
   bool       portOk = false;
@@ -112,6 +130,22 @@ int main(int argc, char** argv)
   cfg.outputDir      = outputDir;
   cfg.token          = parser.value(tokenOption);
   cfg.allowedOrigins = parser.values(originOption);
+
+  // Transcription follows the key rather than a flag: a reviewer who sets
+  // DEEPGRAM_API_KEY gets transcripts, and development without one still records.
+  // The key is never a command-line argument, which would put it in shell history
+  // and in the process list for every other user on the machine.
+  cfg.stt.apiKey  = QProcessEnvironment::systemEnvironment().value(QStringLiteral("DEEPGRAM_API_KEY"));
+  cfg.stt.model   = parser.value(modelOption);
+  cfg.stt.diarize = parser.isSet(diarizeOption);
+  cfg.transcribe  = !cfg.stt.apiKey.isEmpty() && !parser.isSet(noTranscribeOption);
+
+  if (cfg.transcribe)
+    QTextStream(stdout) << "Transcribing with " << cfg.stt.model << Qt::endl;
+  else if (parser.isSet(noTranscribeOption))
+    QTextStream(stdout) << "Recording only (--no-transcribe)." << Qt::endl;
+  else
+    QTextStream(stdout) << "Recording only — set DEEPGRAM_API_KEY to transcribe." << Qt::endl;
 
   auto server = DST::DESK::IO::WsServer(std::move(cfg));
   if (!server.start()) return 1;

@@ -1,4 +1,5 @@
 #include <QDateTime>
+#include <QTimer>
 #include <QDir>
 #include <QHostAddress>
 #include <QJsonDocument>
@@ -205,6 +206,7 @@ void WsServer::handleStreamOpen(const QJsonObject& msg)
   }
 
   session_->opened[slot] = true;
+  session_->transcript.openStream(stream);
   qInfo("Stream %s open -> %s", Core::Stream::label(stream), qUtf8Printable(path));
 }
 
@@ -218,6 +220,12 @@ void WsServer::handleStreamClose(const QJsonObject& msg)
 
   session_->recorders[slot].close();
   session_->opened[slot] = false;
+  // The merger is told the stream is closed only once the engine has finished with
+  // it, not here. Closing it now would make addFinal discard the results still in
+  // flight — which are precisely the last thing that was said.
+  if (session_->stt[slot] != nullptr) session_->stt[slot]->finish();
+  else                                session_->transcript.closeStream(static_cast<Core::Stream::Value>(raw));
+  drainTranscript();
   qInfo("Stream %s closed (%s)",
         Core::Stream::label(static_cast<Core::Stream::Value>(raw)),
         qUtf8Printable(msg.value(QStringLiteral("reason")).toString(QStringLiteral("unspecified"))));
@@ -251,6 +259,71 @@ void WsServer::onBinaryMessage(const QByteArray& message)
 
   Core::samplesInto(frame, scratch_);
   session_->recorders[slot].accept(frame.header, scratch_);
+
+  if (cfg_.transcribe)
+  {
+    if (session_->stt[slot] == nullptr) startTranscription(frame.header.stream, frame.header.sampleIndex);
+    if (session_->stt[slot] != nullptr) session_->stt[slot]->sendAudio(frame.payload);
+  }
+}
+
+void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firstSampleIndex)
+{
+  const auto slot = indexOf(stream);
+
+  auto* client = new SttClient(cfg_.stt, stream, this);
+  session_->stt[slot] = client;
+
+  connect(client, &SttClient::finalResult, this,
+          [this, stream](double start, double end, QString text, double confidence)
+  {
+    if (!session_) return;
+    session_->transcript.addFinal(stream, start, end, text.toStdString(), confidence);
+    drainTranscript();
+  });
+
+  connect(client, &SttClient::interimResult, this, [this, stream](double start, QString text)
+  {
+    if (!session_) return;
+    session_->transcript.setInterim(stream, start, text.toStdString());
+  });
+
+  connect(client, &SttClient::finished, this, [this, stream]
+  {
+    if (!session_) return;
+
+    // Now, and only now, can nothing further arrive for this stream. Releasing it
+    // here also lets the watermark advance past it so the other stream can commit.
+    session_->transcript.closeStream(stream);
+    drainTranscript();
+
+    if (session_->closing && --session_->sttAwaiting <= 0) finishSession();
+  });
+
+  connect(client, &SttClient::failed, this, [this, stream](QString reason)
+  {
+    qWarning("Transcription failed for %s: %s", Core::Stream::label(stream),
+             qUtf8Printable(reason));
+  });
+
+  // The engine counts from the first audio it receives, so this frame's position on
+  // the shared capture clock is the offset for every time it later reports.
+  client->start(double(firstSampleIndex) / double(Core::kSampleRate));
+}
+
+void WsServer::printUtterance(const Core::Utterance& utterance) const
+{
+  const auto minutes = int(utterance.start) / 60;
+  const auto seconds = utterance.start - minutes * 60;
+
+  qInfo("  %02d:%05.2f  %-10s %s", minutes, seconds,
+        Core::Stream::label(utterance.stream), utterance.text.c_str());
+}
+
+void WsServer::drainTranscript()
+{
+  if (!session_) return;
+  for (const auto& utterance : session_->transcript.takeCommitted()) printUtterance(utterance);
 }
 
 void WsServer::sendReady()
@@ -300,9 +373,39 @@ void WsServer::reportSession() const
 
 void WsServer::closeSession()
 {
-  if (!session_) return;
+  if (!session_ || session_->closing) return;
+  session_->closing = true;
 
   for (auto& rec : session_->recorders) rec.close();
+
+  // Ask each engine connection to finalise, then wait. Results for the last few
+  // seconds of speech arrive after the request, so flushing now would discard them.
+  session_->sttAwaiting = 0;
+  for (auto* client : session_->stt)
+  {
+    if (client == nullptr || client->isFinished()) continue;
+    ++session_->sttAwaiting;
+    client->finish();
+  }
+
+  if (session_->sttAwaiting == 0)
+  {
+    finishSession();
+    return;
+  }
+
+  // A connection that never answers must not strand the session forever.
+  QTimer::singleShot(5000, this, [this] { finishSession(); });
+}
+
+void WsServer::finishSession()
+{
+  if (!session_) return;
+
+  // Whatever the watermark never reached: with one stream ahead of the other at the
+  // end, this is usually the last thing that was said.
+  for (const auto& utterance : session_->transcript.flush()) printUtterance(utterance);
+
   reportSession();
 
   if (session_->socket != nullptr)

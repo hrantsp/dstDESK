@@ -1,5 +1,6 @@
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTextStream>
@@ -25,6 +26,27 @@ constexpr double kAmplitude = 0.30;
 // keeps the simulation honest about that.
 constexpr std::uint32_t kStartIndex = Core::kSampleRate;
 
+QByteArray buildFrameFrom(Core::Stream::Value stream, std::uint32_t sampleIndex,
+                          const std::vector<std::int16_t>& source, std::size_t at)
+{
+  auto frame = QByteArray(int(Core::kFrameBytes), Qt::Uninitialized);
+  auto* pp   = reinterpret_cast<std::byte*>(frame.data());
+
+  pp[Core::kOffsetVersion] = static_cast<std::byte>(Core::kVersion);
+  pp[Core::kOffsetStream ] = static_cast<std::byte>(stream);
+  Core::writeU16(pp + Core::kOffsetFrameSamples, Core::kFrameSamples);
+  Core::writeU32(pp + Core::kOffsetSampleIndex,  sampleIndex);
+  Core::writeU32(pp + Core::kOffsetFlags,        0);
+
+  for (std::uint32_t ii = 0; ii < Core::kFrameSamples; ++ii)
+  {
+    const std::size_t index = at + ii;
+    const std::int16_t value = index < source.size() ? source[index] : 0;
+    Core::writeU16(pp + Core::kHeaderBytes + ii * 2, static_cast<std::uint16_t>(value));
+  }
+  return frame;
+}
+
 QByteArray buildFrame(Core::Stream::Value stream, std::uint32_t sampleIndex, double hertz)
 {
   auto frame = QByteArray(int(Core::kFrameBytes), Qt::Uninitialized);
@@ -48,6 +70,73 @@ QByteArray buildFrame(Core::Stream::Value stream, std::uint32_t sampleIndex, dou
   return frame;
 }
 
+// Reads a 16 kHz mono 16-bit WAV. The data chunk is located rather than assumed to
+// start at byte 44: writers legitimately insert others (LIST, fact) before it, and a
+// fixed offset would silently read metadata as audio.
+std::vector<std::int16_t> readWav(const QString& path, QString& error)
+{
+  auto file = QFile(path);
+  if (!file.open(QIODevice::ReadOnly))
+  {
+    error = QStringLiteral("cannot open %1").arg(path);
+    return {};
+  }
+
+  const QByteArray all = file.readAll();
+  if (all.size() < 44 || all.left(4) != "RIFF" || all.mid(8, 4) != "WAVE")
+  {
+    error = QStringLiteral("%1 is not a WAV file").arg(path);
+    return {};
+  }
+
+  auto readU32 = [&all](int at) { return quint32(quint8(all[at])) | (quint32(quint8(all[at+1])) << 8)
+                                       | (quint32(quint8(all[at+2])) << 16) | (quint32(quint8(all[at+3])) << 24); };
+  auto readU16 = [&all](int at) { return quint16(quint8(all[at])) | (quint16(quint8(all[at+1])) << 8); };
+
+  int at = 12;
+  int dataAt = -1, dataLen = 0;
+  quint16 channels = 0, bits = 0;
+  quint32 rate = 0;
+
+  while (at + 8 <= all.size())
+  {
+    const QByteArray id = all.mid(at, 4);
+    const int len = int(readU32(at + 4));
+    const int body = at + 8;
+
+    if (id == "fmt " && body + 16 <= all.size())
+    {
+      channels = readU16(body + 2);
+      rate     = readU32(body + 4);
+      bits     = readU16(body + 14);
+    }
+    else if (id == "data")
+    {
+      dataAt  = body;
+      dataLen = std::min(len, int(all.size()) - body);
+    }
+    at = body + len + (len & 1); // chunks are word-aligned
+  }
+
+  if (dataAt < 0)
+  {
+    error = QStringLiteral("%1 has no data chunk").arg(path);
+    return {};
+  }
+  if (channels != 1 || bits != 16 || rate != Core::kSampleRate)
+  {
+    error = QStringLiteral("%1 is %2 ch / %3 bit / %4 Hz; needs 1 / 16 / %5")
+                .arg(path).arg(channels).arg(bits).arg(rate).arg(Core::kSampleRate);
+    return {};
+  }
+
+  auto samples = std::vector<std::int16_t>(std::size_t(dataLen / 2));
+  for (std::size_t ii = 0; ii < samples.size(); ++ii)
+    samples[ii] = std::int16_t(readU16(dataAt + int(ii) * 2));
+
+  return samples;
+}
+
 QString encode(const QJsonObject& msg)
 {
   return QString::fromUtf8(QJsonDocument(msg).toJson(QJsonDocument::Compact));
@@ -60,8 +149,31 @@ public:
     : cfg_(cfg)
     , app_(app)
   {
-    const std::uint32_t total = std::uint32_t(cfg_.seconds * Core::kSampleRate);
-    frameCount_ = total / Core::kFrameSamples;
+    auto error = QString{};
+    if (!cfg_.micFile.isEmpty()) micAudio_ = readWav(cfg_.micFile, error);
+    if (error.isEmpty() && !cfg_.tabFile.isEmpty()) tabAudio_ = readWav(cfg_.tabFile, error);
+
+    if (!error.isEmpty())
+    {
+      loadError_ = error;
+      return;
+    }
+
+    tabDelayFrames_ = std::uint32_t(cfg_.tabOffset * Core::kSampleRate) / Core::kFrameSamples;
+
+    // With real audio, the run lasts as long as the material rather than --seconds.
+    if (!micAudio_.empty() || !tabAudio_.empty())
+    {
+      const auto framesFor = [](const std::vector<std::int16_t>& ss)
+      {
+        return std::uint32_t((ss.size() + Core::kFrameSamples - 1) / Core::kFrameSamples);
+      };
+      frameCount_ = std::max(framesFor(micAudio_), framesFor(tabAudio_) + tabDelayFrames_);
+    }
+    else
+    {
+      frameCount_ = std::uint32_t(cfg_.seconds * Core::kSampleRate) / Core::kFrameSamples;
+    }
 
     if (cfg_.injectGap)
     {
@@ -79,11 +191,20 @@ public:
     // never closed. A hung diagnostic is worse than a failing one.
     watchdog_.setSingleShot(true);
     QObject::connect(&watchdog_, &QTimer::timeout, [this] { onWatchdog(); });
-    watchdog_.start(int((cfg_.seconds + 10.0) * 1000));
+    // Started once frameCount_ is known; with a file that is the length of the
+    // audio, not --seconds, which would cut a longer clip short.
+    const double span = double(frameCount_) * Core::kFrameMillis / 1000.0;
+    watchdog_.start(int((span + 10.0) * 1000));
   }
 
   int run()
   {
+    if (!loadError_.isEmpty())
+    {
+      out() << loadError_ << Qt::endl;
+      return 2;
+    }
+
     const QUrl url(QStringLiteral("ws://127.0.0.1:%1").arg(cfg_.port));
     out() << "Connecting to " << url.toString() << Qt::endl;
     socket_.open(url);
@@ -137,7 +258,12 @@ private:
       socket_.sendTextMessage(encode(open));
     }
 
-    out() << "Sending " << frameCount_ << " frames per stream (" << cfg_.seconds << " s)";
+    // Derived from the frame count, not from --seconds: with a file the run lasts as
+    // long as the audio, and reporting the flag's default would be a lie.
+    out() << "Sending " << frameCount_ << " frames per stream ("
+          << QString::number(double(frameCount_) * Core::kFrameMillis / 1000.0, 'f', 2) << " s)";
+    if (!cfg_.micFile.isEmpty()) out() << ", mic=" << cfg_.micFile;
+    if (!cfg_.tabFile.isEmpty()) out() << ", meeting=" << cfg_.tabFile;
     if (cfg_.injectGap) out() << ", dropping meeting frames " << gapFrom_ << "-" << gapTo_;
     out() << Qt::endl;
 
@@ -154,10 +280,30 @@ private:
 
     const std::uint32_t index = kStartIndex + sent_ * Core::kFrameSamples;
 
-    socket_.sendBinaryMessage(buildFrame(Core::Stream::Mic, index, kMicHertz));
+    if (!micAudio_.empty())
+      socket_.sendBinaryMessage(buildFrameFrom(Core::Stream::Mic, index, micAudio_,
+                                               std::size_t(sent_) * Core::kFrameSamples));
+    else
+      socket_.sendBinaryMessage(buildFrame(Core::Stream::Mic, index, kMicHertz));
 
     const bool inGap = cfg_.injectGap && sent_ >= gapFrom_ && sent_ < gapTo_;
-    if (!inGap) socket_.sendBinaryMessage(buildFrame(Core::Stream::Tab, index, kTabHertz));
+    if (!inGap)
+    {
+      if (!tabAudio_.empty())
+      {
+        // Before its offset elapses the meeting stream still sends frames, but silent
+        // ones: the stream is open and its position on the shared clock must keep
+        // advancing, or the gap detector would see a hole rather than a late start.
+        const std::size_t at = sent_ >= tabDelayFrames_
+                                 ? std::size_t(sent_ - tabDelayFrames_) * Core::kFrameSamples
+                                 : tabAudio_.size(); // past the end reads as silence
+        socket_.sendBinaryMessage(buildFrameFrom(Core::Stream::Tab, index, tabAudio_, at));
+      }
+      else
+      {
+        socket_.sendBinaryMessage(buildFrame(Core::Stream::Tab, index, kTabHertz));
+      }
+    }
 
     ++sent_;
   }
@@ -248,6 +394,11 @@ private:
   bool              finished_ = false;
   bool              reported_ = false;
   bool              connected_ = false;
+
+  std::vector<std::int16_t> micAudio_;
+  std::vector<std::int16_t> tabAudio_;
+  std::uint32_t tabDelayFrames_ = 0;
+  QString       loadError_;
 
   std::uint32_t frameCount_ = 0;
   std::uint32_t sent_       = 0;

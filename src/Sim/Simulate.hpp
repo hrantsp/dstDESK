@@ -25,6 +25,16 @@ struct SimulateConfig
   // Drops a run of frames from the meeting stream midway, so gap padding can be
   // observed rather than assumed. PROTOCOL.md §5.4.
   bool          injectGap = false;
+
+  // Real audio instead of tones. Each must be 16 kHz mono 16-bit — the format the
+  // wire carries — so no conversion happens here either. A stream with no file falls
+  // back to its tone, which keeps the two distinguishable while testing one of them.
+  QString micFile;
+  QString tabFile;
+
+  // Seconds to delay the meeting stream, so the two overlap the way a conversation
+  // does rather than starting together.
+  double tabOffset = 0.0;
 };
 
 int runSimulation(const SimulateConfig& cfg);

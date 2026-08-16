@@ -17,6 +17,8 @@
 #include <vector>
 #include "Core/Frame.hpp"
 #include "Core/StreamRecorder.hpp"
+#include "Core/Transcript.hpp"
+#include "SttClient.hpp"
 
 class QWebSocket;
 
@@ -32,6 +34,11 @@ struct ServerConfig
   // hostile process running as the same user.
   QString       token;
   QStringList   allowedOrigins;
+
+  // Transcription follows the key: with one, audio is transcribed as well as
+  // recorded; without one, the app still records. --no-transcribe forces it off.
+  bool      transcribe = false;
+  SttConfig stt;
 };
 
 class WsServer : public QObject
@@ -58,6 +65,19 @@ private:
 
     std::array<Core::StreamRecorder, 2> recorders;
     std::array<bool, 2>                 opened = { false, false };
+
+    // Created with the stream, but only connected once the first frame arrives: the
+    // engine measures time from the first audio it receives, so the offset onto the
+    // shared capture clock is not known until then.
+    std::array<SttClient*, 2> stt     = { nullptr, nullptr };
+    std::array<bool, 2>       sttOpen = { false, false };
+
+    Core::TranscriptMerger transcript;
+
+    // Teardown is two-phase: the engine is asked to finalise, and the session is only
+    // destroyed once it has answered. Doing it in one step drops the last utterance.
+    bool closing     = false;
+    int  sttAwaiting = 0;
   };
 
   void onNewConnection();
@@ -70,9 +90,14 @@ private:
   void handleStreamClose(const QJsonObject& msg);
   void handleBye        ();
 
+  void startTranscription(Core::Stream::Value stream, std::uint32_t firstSampleIndex);
+  void drainTranscript();
+  void printUtterance(const Core::Utterance& utterance) const;
+
   void sendReady();
   void rejectWith(const char* code, std::uint16_t closeCode, const QString& detail);
   void closeSession();
+  void finishSession();
   void reportSession() const;
 
   static const char* streamKey(Core::Stream::Value stream);
