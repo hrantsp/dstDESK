@@ -77,13 +77,16 @@ endif()
 # ── Application ──────────────────────────────────────────────────────────────
 # Qt enters here and nowhere below it: the core above stays framework-free so it
 # can be tested without an event loop or a display.
-find_package(Qt6 REQUIRED COMPONENTS Core Network WebSockets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network WebSockets)
 
 set(CMAKE_AUTOMOC ON)
 
 add_executable(dstdesk
     src/App/main.cpp
     src/App/SelfTest.cpp
+    src/App/MainWindow.cpp
+    src/App/TranscriptView.cpp
+    src/App/SettingsDialog.cpp
     src/IO/WsServer.cpp
     src/IO/SttClient.cpp)
 
@@ -92,6 +95,8 @@ target_include_directories(dstdesk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
 target_link_libraries(dstdesk PRIVATE
     dstdesk_core
     Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
     Qt6::Network
     Qt6::WebSockets)
 

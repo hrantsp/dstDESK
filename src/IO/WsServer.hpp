@@ -52,6 +52,24 @@ public:
   bool          start();
   std::uint16_t port() const;
 
+  /// Replaces everything except the listening port, which is bound at startup. Takes
+  /// effect when the next session opens: a session's recorders and transcription
+  /// connections were built from the values current when it began, and swapping them
+  /// underneath would give one session two identities.
+  void updateConfig(const ServerConfig& cfg);
+
+signals:
+  /// Settled text, in conversational order. Emitted once per utterance.
+  void utteranceCommitted(const Core::Utterance& utterance);
+
+  /// Text that may still change, for the live area. An empty string clears it.
+  void interimChanged(Core::Stream::Value stream, const QString& text);
+
+  void sessionStarted(const QString& client, const QString& directory);
+  void sessionEnded();
+  void streamOpened(Core::Stream::Value stream);
+  void notice(const QString& text);
+
 private:
   // One connection at a time. A reconnecting extension must be able to take over, so
   // a new connection replaces the old rather than being refused.
@@ -92,7 +110,7 @@ private:
 
   void startTranscription(Core::Stream::Value stream, std::uint32_t firstSampleIndex);
   void drainTranscript();
-  void printUtterance(const Core::Utterance& utterance) const;
+  void emitUtterance(const Core::Utterance& utterance);
 
   void sendReady();
   void rejectWith(const char* code, std::uint16_t closeCode, const QString& detail);

@@ -2,11 +2,17 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QTextStream>
+#include <QApplication>
 #include <QProcessEnvironment>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QTimer>
 #include <csignal>
+#include <memory>
 #include "Core/Protocol.hpp"
 #include "IO/WsServer.hpp"
+#include "MainWindow.hpp"
+#include "Settings.hpp"
 #include "SelfTest.hpp"
 
 namespace {
@@ -36,13 +42,34 @@ void installSignalHandlers()
   poll->start(100);
 }
 
+// Scanned before the application object exists, because the choice of object depends
+// on it: QApplication needs a display, and --selftest must stay runnable over ssh and
+// on a build machine that has none.
+bool wantsHeadless(int argc, char** argv)
+{
+  for (int ii = 1; ii < argc; ++ii)
+  {
+    const auto arg = QString::fromLocal8Bit(argv[ii]);
+    if (arg == QStringLiteral("--selftest") || arg == QStringLiteral("--headless")) return true;
+  }
+  return false;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
-  auto app = QCoreApplication(argc, argv);
+  const bool headless = wantsHeadless(argc, argv);
+
+  auto app = headless
+      ? std::unique_ptr<QCoreApplication>(new QCoreApplication(argc, argv))
+      : std::unique_ptr<QCoreApplication>(new QApplication(argc, argv));
   QCoreApplication::setApplicationName   (QStringLiteral("dstdesk"));
   QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+
+  // Stored settings are the defaults, so a double-clicked launch behaves like the
+  // last configured one. An explicitly typed flag still overrides them.
+  const auto stored = DST::DESK::App::Settings::load();
 
   auto parser = QCommandLineParser{};
   parser.setApplicationDescription(
@@ -58,15 +85,15 @@ int main(int argc, char** argv)
 
   const auto portOption = QCommandLineOption(
       QStringLiteral("port"), QStringLiteral("Loopback port."),
-      QStringLiteral("port"), QString::number(DST::DESK::Core::kDefaultPort));
+      QStringLiteral("port"), QString::number(stored.port));
 
   const auto outputOption = QCommandLineOption(
       QStringLiteral("output"), QStringLiteral("Directory for recorded audio."),
-      QStringLiteral("dir"), QDir::current().filePath(QStringLiteral("out")));
+      QStringLiteral("dir"), stored.outputDir);
 
   const auto tokenOption = QCommandLineOption(
       QStringLiteral("token"), QStringLiteral("Shared secret the client must present."),
-      QStringLiteral("secret"), QString());
+      QStringLiteral("secret"), stored.token);
 
   const auto noTranscribeOption = QCommandLineOption(
       QStringLiteral("no-transcribe"),
@@ -74,7 +101,7 @@ int main(int argc, char** argv)
 
   const auto modelOption = QCommandLineOption(
       QStringLiteral("model"), QStringLiteral("Transcription model."),
-      QStringLiteral("name"), QStringLiteral("nova-3"));
+      QStringLiteral("name"), stored.model);
 
   const auto diarizeOption = QCommandLineOption(
       QStringLiteral("diarize"),
@@ -95,8 +122,13 @@ int main(int argc, char** argv)
   parser.addOption(originOption);
   parser.addOption(noTranscribeOption);
   parser.addOption(modelOption);
+  const auto headlessOption = QCommandLineOption(
+      QStringLiteral("headless"),
+      QStringLiteral("Run without a window, printing the transcript to the console."));
+
   parser.addOption(diarizeOption);
-  parser.process(app);
+  parser.addOption(headlessOption);
+  parser.process(*app);
 
   bool       portOk = false;
   const auto port   = parser.value(portOption).toUInt(&portOk);
@@ -135,21 +167,55 @@ int main(int argc, char** argv)
   // DEEPGRAM_API_KEY gets transcripts, and development without one still records.
   // The key is never a command-line argument, which would put it in shell history
   // and in the process list for every other user on the machine.
-  cfg.stt.apiKey  = QProcessEnvironment::systemEnvironment().value(QStringLiteral("DEEPGRAM_API_KEY"));
+  cfg.stt.apiKey  = stored.apiKey;
   cfg.stt.model   = parser.value(modelOption);
-  cfg.stt.diarize = parser.isSet(diarizeOption);
+  cfg.stt.diarize = parser.isSet(diarizeOption) || stored.diarize;
   cfg.transcribe  = !cfg.stt.apiKey.isEmpty() && !parser.isSet(noTranscribeOption);
+
+  const QString keyHint =
+      parser.isSet(noTranscribeOption)
+          ? QStringLiteral("Transcription is off because --no-transcribe was given.")
+          : QStringLiteral("No transcription key was found.\n\nSet DEEPGRAM_API_KEY, or "
+                           "put it in\n%1\n\n    [deepgram]\n    apiKey=YOUR_KEY\n\n"
+                           "A double-clicked application inherits no shell environment, "
+                           "so the config file is what makes it work outside a terminal.")
+                .arg(DST::DESK::App::Settings::path());
 
   if (cfg.transcribe)
     QTextStream(stdout) << "Transcribing with " << cfg.stt.model << Qt::endl;
-  else if (parser.isSet(noTranscribeOption))
-    QTextStream(stdout) << "Recording only (--no-transcribe)." << Qt::endl;
   else
-    QTextStream(stdout) << "Recording only — set DEEPGRAM_API_KEY to transcribe." << Qt::endl;
+    QTextStream(stdout) << keyHint << Qt::endl;
 
   auto server = DST::DESK::IO::WsServer(std::move(cfg));
   if (!server.start()) return 1;
 
+  auto window = std::unique_ptr<DST::DESK::App::MainWindow>{};
+
+  if (headless)
+  {
+    // The console path consumes the same signals the window does, so there is one
+    // pipeline rather than two that can drift apart.
+    QObject::connect(&server, &DST::DESK::IO::WsServer::utteranceCommitted,
+                     [](const DST::DESK::Core::Utterance& utterance)
+    {
+      qInfo("  %02d:%05.2f  %-10s %s", int(utterance.start) / 60,
+            utterance.start - (int(utterance.start) / 60) * 60,
+            DST::DESK::Core::Stream::label(utterance.stream), utterance.text.c_str());
+    });
+  }
+  else
+  {
+    auto effective = stored;
+    effective.port      = static_cast<std::uint16_t>(port);
+    effective.token     = cfg.token;
+    effective.outputDir = outputDir;
+    effective.model     = cfg.stt.model;
+    effective.diarize   = cfg.stt.diarize;
+
+    window = std::make_unique<DST::DESK::App::MainWindow>(server, effective, cfg.transcribe, keyHint);
+    window->show();
+  }
+
   installSignalHandlers();
-  return app.exec();
+  return app->exec();
 }

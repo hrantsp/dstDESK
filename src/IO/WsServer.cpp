@@ -70,6 +70,13 @@ bool WsServer::start()
 
 std::uint16_t WsServer::port() const { return server_.serverPort(); }
 
+void WsServer::updateConfig(const ServerConfig& cfg)
+{
+  const auto boundPort = cfg_.port;
+  cfg_ = cfg;
+  cfg_.port = boundPort;
+}
+
 const char* WsServer::streamKey(Core::Stream::Value stream)
 {
   switch (stream) { case Core::Stream::Mic : return "mic";
@@ -174,9 +181,10 @@ void WsServer::handleHello(const QJsonObject& msg)
   session_->dir = QDir(cfg_.outputDir).filePath(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
   QDir().mkpath(session_->dir);
 
-  qInfo("Handshake accepted from %s", qUtf8Printable(session_->client.isEmpty()
-                                                     ? QStringLiteral("(unnamed client)")
-                                                     : session_->client));
+  const QString who = session_->client.isEmpty() ? QStringLiteral("(unnamed client)")
+                                                 : session_->client;
+  qInfo("Handshake accepted from %s", qUtf8Printable(who));
+  emit sessionStarted(who, session_->dir);
   sendReady();
 }
 
@@ -208,6 +216,7 @@ void WsServer::handleStreamOpen(const QJsonObject& msg)
   session_->opened[slot] = true;
   session_->transcript.openStream(stream);
   qInfo("Stream %s open -> %s", Core::Stream::label(stream), qUtf8Printable(path));
+  emit streamOpened(stream);
 }
 
 void WsServer::handleStreamClose(const QJsonObject& msg)
@@ -286,6 +295,7 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
   {
     if (!session_) return;
     session_->transcript.setInterim(stream, start, text.toStdString());
+    emit interimChanged(stream, text);
   });
 
   connect(client, &SttClient::finished, this, [this, stream]
@@ -311,19 +321,15 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
   client->start(double(firstSampleIndex) / double(Core::kSampleRate));
 }
 
-void WsServer::printUtterance(const Core::Utterance& utterance) const
+void WsServer::emitUtterance(const Core::Utterance& utterance)
 {
-  const auto minutes = int(utterance.start) / 60;
-  const auto seconds = utterance.start - minutes * 60;
-
-  qInfo("  %02d:%05.2f  %-10s %s", minutes, seconds,
-        Core::Stream::label(utterance.stream), utterance.text.c_str());
+  emit utteranceCommitted(utterance);
 }
 
 void WsServer::drainTranscript()
 {
   if (!session_) return;
-  for (const auto& utterance : session_->transcript.takeCommitted()) printUtterance(utterance);
+  for (const auto& utterance : session_->transcript.takeCommitted()) emitUtterance(utterance);
 }
 
 void WsServer::sendReady()
@@ -404,9 +410,10 @@ void WsServer::finishSession()
 
   // Whatever the watermark never reached: with one stream ahead of the other at the
   // end, this is usually the last thing that was said.
-  for (const auto& utterance : session_->transcript.flush()) printUtterance(utterance);
+  for (const auto& utterance : session_->transcript.flush()) emitUtterance(utterance);
 
   reportSession();
+  emit sessionEnded();
 
   if (session_->socket != nullptr)
   {
