@@ -16,7 +16,10 @@ class DstDeskConan(ConanFile):
         # Qt's TLS support is a plugin that dynamically loads OpenSSL; Qt bundles
         # none. Requiring it here keeps wss:// from depending on what the host
         # happens to have installed — decision 12.
-        self.requires("openssl/3.6.3")
+        # Shared, deliberately. Qt's TLS support is a plugin that opens libssl by
+        # name at runtime, so a static OpenSSL cannot serve it however correctly it is
+        # linked — there would be no file for the plugin to find. Decision 12.
+        self.requires("openssl/3.6.3", options={"shared": True})
 
     def build_requirements(self):
         self.test_requires("catch2/3.15.3")

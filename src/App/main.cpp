@@ -65,7 +65,7 @@ int main(int argc, char** argv)
       ? std::unique_ptr<QCoreApplication>(new QCoreApplication(argc, argv))
       : std::unique_ptr<QCoreApplication>(new QApplication(argc, argv));
   QCoreApplication::setApplicationName   (QStringLiteral("dstdesk"));
-  QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+  QCoreApplication::setApplicationVersion(QStringLiteral(DSTDESK_VERSION));
 
   // Stored settings are the defaults, so a double-clicked launch behaves like the
   // last configured one. An explicitly typed flag still overrides them.

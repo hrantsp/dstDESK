@@ -36,6 +36,10 @@ conan profile detect --force
 conan create dstDESK/rec/qt-official        # downloads official Qt, ~1.6 GB, once
 ```
 
+`dstOMNI/dst.py` wraps all of this — `python3 dstOMNI/dst.py setup|build|test|package`
+— and is the path a reviewer follows. The commands below are what it runs, and are
+what to use when working on this repository directly.
+
 Then, in `dstDESK/`:
 
 ```bash

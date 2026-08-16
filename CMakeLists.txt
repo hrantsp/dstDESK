@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(dstDESK LANGUAGES CXX)
+project(dstDESK VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -92,6 +92,10 @@ add_executable(dstdesk
 
 target_include_directories(dstdesk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
 
+# The version is stated once, by project() above. Repeating it in source is how a
+# release ends up disagreeing with the tag that names it.
+target_compile_definitions(dstdesk PRIVATE DSTDESK_VERSION="${PROJECT_VERSION}")
+
 target_link_libraries(dstdesk PRIVATE
     dstdesk_core
     Qt6::Core
@@ -115,6 +119,7 @@ add_executable(dstsim
     src/Sim/Simulate.cpp)
 
 target_include_directories(dstsim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/Sim)
+target_compile_definitions(dstsim PRIVATE DSTDESK_VERSION="${PROJECT_VERSION}")
 
 target_link_libraries(dstsim PRIVATE
     dstdesk_core
@@ -142,3 +147,94 @@ if(DSTDESK_BUILD_TESTS)
     include(Catch)
     catch_discover_tests(dstdesk_tests)
 endif()
+
+# ── Packaging ────────────────────────────────────────────────────────────────
+# One artifact that runs on a machine with no toolchain, which is what "package"
+# has to mean — a bare executable would only run where Qt already happens to be.
+include(GNUInstallDirs)
+
+# The deployed layout puts binaries in bin/ and the Qt libraries in lib/, so the
+# executables need a relative run path to find them. Without this the archive
+# contains every library it needs and still refuses to start anywhere but the machine
+# that built it — which is the failure "packaged" is supposed to rule out.
+if(APPLE)
+    set(DSTDESK_INSTALL_RPATH "@executable_path/../lib")
+elseif(UNIX)
+    set(DSTDESK_INSTALL_RPATH "$ORIGIN/../lib")
+endif()
+
+if(DEFINED DSTDESK_INSTALL_RPATH)
+    set_target_properties(dstdesk dstsim PROPERTIES
+        INSTALL_RPATH "${DSTDESK_INSTALL_RPATH}"
+        BUILD_WITH_INSTALL_RPATH FALSE)
+endif()
+
+install(TARGETS dstdesk dstsim
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        BUNDLE  DESTINATION .)
+
+# Qt's own deployment tooling collects the libraries and plugins the binary loads,
+# including the platform and TLS plugins that are opened by name at runtime and so
+# appear in no link line. It dispatches to windeployqt or macdeployqt as appropriate;
+# Linux support is partial, hence NO_UNSUPPORTED_PLATFORM_ERROR rather than a hard
+# failure on the platform this is developed on.
+qt_generate_deploy_app_script(
+    TARGET dstdesk
+    OUTPUT_SCRIPT DSTDESK_DEPLOY_SCRIPT
+    NO_UNSUPPORTED_PLATFORM_ERROR)
+install(SCRIPT ${DSTDESK_DEPLOY_SCRIPT})
+
+# Plugins are loaded by name at runtime, so they appear in no link line and the
+# deployment script does not collect them on every platform. Two groups matter:
+# without `platforms` the application cannot open a window at all, and without `tls`
+# every secure connection fails — a failure that surfaces on the first transcription
+# request rather than at startup.
+foreach(DSTDESK_PLUGIN_GROUP IN ITEMS platforms tls)
+    if(EXISTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/${DSTDESK_PLUGIN_GROUP}")
+        install(DIRECTORY "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/${DSTDESK_PLUGIN_GROUP}"
+                DESTINATION plugins
+                FILES_MATCHING PATTERN "*${CMAKE_SHARED_LIBRARY_SUFFIX}*")
+    endif()
+endforeach()
+
+# Tells Qt where those plugins are, relative to the executable. Without it Qt looks
+# where it was built, which does not exist on the machine the package is opened on.
+# Written into a staging subdirectory, never beside the built binaries. Qt reads
+# qt.conf next to the executable, so leaving one in the build tree would make the
+# development build follow the packaged layout and look for plugins that are only
+# there after installation.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/deploy/qt.conf" "[Paths]\nPlugins = ../plugins\n")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/deploy/qt.conf" DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# Qt's TLS plugin opens OpenSSL by name; Qt bundles none. Shipping the one Conan
+# resolved makes secure connections a property of the package rather than of whatever
+# the receiving machine happens to have. See decision 12 in dstOMNI/DESIGN.md.
+find_package(OpenSSL REQUIRED)
+# Conan's OpenSSL targets are interface aggregates rather than imported libraries, so
+# IMPORTED_RUNTIME_ARTIFACTS does not apply; the files are taken from the package
+# directory CMakeDeps reports. Only shared builds need shipping — a static OpenSSL is
+# already inside whatever linked it, and nothing here links it at all.
+if(DEFINED openssl_LIB_DIRS_RELEASE)
+    file(GLOB DSTDESK_OPENSSL_RUNTIME
+         "${openssl_LIB_DIRS_RELEASE}/libssl${CMAKE_SHARED_LIBRARY_SUFFIX}*"
+         "${openssl_LIB_DIRS_RELEASE}/libcrypto${CMAKE_SHARED_LIBRARY_SUFFIX}*")
+    if(DSTDESK_OPENSSL_RUNTIME)
+        install(FILES ${DSTDESK_OPENSSL_RUNTIME} DESTINATION lib)
+    else()
+        message(STATUS
+            "OpenSSL resolved to a static build, so nothing is shipped for it. The "
+            "packaged application will use whatever OpenSSL the target machine has, "
+            "and dstdesk --selftest reports whether that works.")
+    endif()
+endif()
+
+set(CPACK_PACKAGE_NAME "dstDESK")
+set(CPACK_PACKAGE_VENDOR "hrantsp")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Dual-stream meeting transcription")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "dstDESK")
+set(CPACK_PACKAGE_FILE_NAME
+    "dstDESK-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_VERBATIM_VARIABLES ON)
+
+include(CPack)

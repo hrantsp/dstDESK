@@ -8,7 +8,7 @@ int main(int argc, char** argv)
 {
   auto app = QCoreApplication(argc, argv);
   QCoreApplication::setApplicationName   (QStringLiteral("dstsim"));
-  QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+  QCoreApplication::setApplicationVersion(QStringLiteral(DSTDESK_VERSION));
 
   auto parser = QCommandLineParser{};
   parser.setApplicationDescription(

@@ -337,7 +337,7 @@ void WsServer::sendReady()
   auto msg = QJsonObject{};
   msg[QStringLiteral("type")]     = QStringLiteral("ready");
   msg[QStringLiteral("protocol")] = int(Core::kVersion);
-  msg[QStringLiteral("server")]   = QStringLiteral("dstDESK/0.1.0");
+  msg[QStringLiteral("server")]   = QStringLiteral("dstDESK/" DSTDESK_VERSION);
   session_->socket->sendTextMessage(QString::fromUtf8(QJsonDocument(msg).toJson(QJsonDocument::Compact)));
 }
 
