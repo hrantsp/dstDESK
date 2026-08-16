@@ -14,7 +14,7 @@ option(DSTDESK_BUILD_TESTS "Build the unit tests" ON)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(DST_PROTOCOL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rec)
-set(DST_GENERATED_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/src/protocol/protocol_generated.h)
+set(DST_GENERATED_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/src/Core/Protocol.hpp)
 set(DST_ORCH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../dstORCH)
 
 set(DST_GENERATE_ARGS --cpp-out ${DST_GENERATED_HEADER})
@@ -59,15 +59,14 @@ add_custom_target(dst_protocol_generated ALL DEPENDS ${DST_PROTOCOL_STAMP})
 
 # ── Core: no Qt, so it can be tested without an event loop or a display ──────
 add_library(dstdesk_core STATIC
-    src/protocol/frame.cpp
-    src/audio/wav_writer.cpp
-    src/audio/stream_recorder.cpp)
+    src/Core/Frame.cpp
+    src/Core/WavWriter.cpp)
 
 add_dependencies(dstdesk_core dst_protocol_generated)
 
 target_include_directories(dstdesk_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/protocol)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Core)
 
 if(MSVC)
     target_compile_options(dstdesk_core PRIVATE /W4)
@@ -83,8 +82,10 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network WebSockets)
 set(CMAKE_AUTOMOC ON)
 
 add_executable(dstdesk
-    src/main.cpp
-    src/app/selftest.cpp)
+    src/App/main.cpp
+    src/App/SelfTest.cpp)
+
+target_include_directories(dstdesk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
 
 target_link_libraries(dstdesk PRIVATE
     dstdesk_core
@@ -104,8 +105,8 @@ if(DSTDESK_BUILD_TESTS)
     enable_testing()
 
     add_executable(dstdesk_tests
-        tst/test_frame.cpp
-        tst/test_recorder.cpp)
+        tst/TestFrame.cpp
+        tst/TestRecorder.cpp)
     target_link_libraries(dstdesk_tests PRIVATE dstdesk_core Catch2::Catch2WithMain)
 
     include(Catch)

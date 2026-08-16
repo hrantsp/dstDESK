@@ -1,9 +1,11 @@
+Session.vim
+
 bin/
 out/
 
 # Protocol constants generated from rec/protocol.json by the build.
 # Never edited by hand, never committed — the .json is the source of truth.
-src/protocol/protocol_generated.h
+src/Core/Protocol.hpp
 
 # Conan
 CMakeUserPresets.json

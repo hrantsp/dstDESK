@@ -83,52 +83,86 @@ def render_cpp(spec):
     out = [
         f"// {BANNER}",
         "",
-        "#pragma once",
+        "#ifndef DST_DESK_CORE_PROTOCOL_HPP",
+        "#define DST_DESK_CORE_PROTOCOL_HPP",
         "",
         "#include <cstddef>",
         "#include <cstdint>",
         "",
-        "namespace dst::protocol {",
+        "namespace DST { namespace DESK { namespace Core {",
         "",
-        f"inline constexpr std::uint8_t  kVersion       = {spec['protocolVersion']};",
-        f"inline constexpr std::uint32_t kSampleRate    = {audio['sampleRate']};",
-        f"inline constexpr std::uint16_t kFrameSamples  = {audio['frameSamples']};",
-        f"inline constexpr std::uint16_t kChannels      = {audio['channels']};",
-        f"inline constexpr std::size_t   kHeaderBytes   = {frame['headerBytes']};",
-        f"inline constexpr std::size_t   kFrameBytes    = {frame_bytes};",
-        f"inline constexpr double        kFrameMillis   = {duration_ms};",
-        f"inline constexpr std::uint16_t kDefaultPort   = {spec['transport']['defaultPort']};",
+        f"inline constexpr std::uint8_t  kVersion      = {spec['protocolVersion']};",
+        f"inline constexpr std::uint32_t kSampleRate   = {audio['sampleRate']};",
+        f"inline constexpr std::uint16_t kFrameSamples = {audio['frameSamples']};",
+        f"inline constexpr std::uint16_t kChannels     = {audio['channels']};",
+        f"inline constexpr std::size_t   kHeaderBytes  = {frame['headerBytes']};",
+        f"inline constexpr std::size_t   kFrameBytes   = {frame_bytes};",
+        f"inline constexpr double        kFrameMillis  = {duration_ms};",
+        f"inline constexpr std::uint16_t kDefaultPort  = {spec['transport']['defaultPort']};",
         "",
         "// Byte offsets within the frame header.",
     ]
     for field in frame["fields"]:
         name = "kOffset" + field["name"][0].upper() + field["name"][1:]
-        out.append(f"inline constexpr std::size_t {name:<22} = {field['offset']};")
+        out.append(f"inline constexpr std::size_t {name:<21} = {field['offset']};")
 
-    out += ["", "enum class Stream : std::uint8_t {"]
-    for stream in spec["streams"]:
-        out.append(f"    {stream['name'].capitalize()} = {stream['value']},")
+    names = [ss["name"].capitalize() for ss in spec["streams"]]
+    width = max(len(nn) for nn in names)
+
+    out += ["", "struct Stream { enum Value : std::uint8_t", "{"]
+    for stream, name in zip(spec["streams"], names):
+        out.append(f"  {name:<{width}} = {stream['value']},")
     out += ["};", ""]
 
-    out.append("inline constexpr const char* streamLabel(Stream s) {")
-    out.append("    switch (s) {")
-    for stream in spec["streams"]:
-        out.append(
-            f"        case Stream::{stream['name'].capitalize()}: "
-            f'return "{stream["label"]}";'
-        )
+    def switchBlock(subject, arms):
+        """Render a switch in the house style: arms stacked under the opening brace,
+        with every ` : ` aligned. Padding is computed rather than hand-counted, so the
+        alignment survives a rename in protocol.json."""
+        lhsWidth = max(len(lhs) for lhs, _ in arms)
+        lines = []
+        head = f"    switch ({subject}) {{ "
+        for index, (lhs, rhs) in enumerate(arms):
+            prefix = head if index == 0 else " " * len(head)
+            lines.append(f"{prefix}{lhs:<{lhsWidth}} : {rhs}")
+        lines[-1] += " }"
+        return lines
+
+    out += ["  static constexpr auto label(Stream::Value val) noexcept", "  {"]
+    out += switchBlock(
+        "val",
+        [(f"case Stream::{nn}", f'return "{ss["label"]}";')
+         for ss, nn in zip(spec["streams"], names)]
+        + [("default", 'return "Unknown";')],
+    )
+    out += ["  }", ""]
+
     out += [
-        "    }",
-        '    return "Unknown";',
-        "}",
+        "  // Whether a raw wire byte names a stream this protocol version defines.",
+        "  static constexpr bool isKnown(std::uint8_t value) noexcept",
+        "  {",
+    ]
+    out += switchBlock(
+        "value",
+        [(f"case {nn}", "return true;") for nn in names]
+        + [("default", "return false;")],
+    )
+    out += [
+        "  }",
+        "};",
         "",
         "// Close codes paired with the error codes in PROTOCOL.md §4.3.",
     ]
     for err in spec["errorCodes"]:
-        const = "kClose" + "".join(p.capitalize() for p in err["code"].split("-"))
-        out.append(f"inline constexpr std::uint16_t {const:<34} = {err['close']};")
+        const = "kClose" + "".join(pp.capitalize() for pp in err["code"].split("-"))
+        out.append(f"inline constexpr std::uint16_t {const:<33} = {err['close']};")
 
-    out += ["", "}  // namespace dst::protocol", ""]
+    out += [
+        "",
+        "} } } // namespace DST::DESK::Core",
+        "",
+        "#endif // DST_DESK_CORE_PROTOCOL_HPP",
+        "",
+    ]
     return "\n".join(out)
 
 
