@@ -120,10 +120,38 @@ endif()
 # where the package landed: this is the path the linker actually used.
 #
 # Written on every platform, not only Windows, so the mechanism can be exercised
-# wherever the project is developed rather than only where it is needed.
+# wherever the project is developed rather than only where it is needed. It is the
+# fallback for the deployment below: if windeployqt is missing, this is what still
+# lets `dst.py run` start the application.
 file(GENERATE
      OUTPUT "$<TARGET_FILE_DIR:dstdesk>/qt-runtime-dir.txt"
      CONTENT "$<TARGET_FILE_DIR:Qt6::Core>")
+
+# Windows: make the built executable start on its own, not only through dst.py.
+#
+# Putting Qt on PATH covers `dst.py run`, but double-clicking the binary is the first
+# thing anyone tries, and the loader then finds no Qt6Widgets.dll. Copying the DLLs
+# beside it is not enough either: Qt locates its plugins relative to Qt6Core.dll, so a
+# copy next to the executable sends it looking for plugins in a directory that does not
+# exist, and the application fails to create a window instead — a worse error, because
+# it is further from the cause. windeployqt gets both halves right, and it is the same
+# tool the install-time deployment further down dispatches to.
+if(WIN32)
+    find_program(DSTDESK_WINDEPLOYQT windeployqt
+                 HINTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}")
+    if(DSTDESK_WINDEPLOYQT)
+        add_custom_command(TARGET dstdesk POST_BUILD
+            COMMAND "${DSTDESK_WINDEPLOYQT}" --no-translations --no-compiler-runtime
+                    "$<TARGET_FILE:dstdesk>"
+            COMMENT "Copying the Qt runtime beside dstdesk.exe"
+            VERBATIM)
+    else()
+        message(WARNING
+            "windeployqt was not found beside Qt, so the built executable will start "
+            "only through `dst.py run`, which puts Qt on PATH. A packaged build is "
+            "unaffected.")
+    endif()
+endif()
 
 # ── Simulator ────────────────────────────────────────────────────────────────
 # A separate executable, not a mode of dstdesk. It is a client of the protocol —
