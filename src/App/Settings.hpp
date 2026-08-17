@@ -31,6 +31,23 @@ struct Settings
   QString       model   = QStringLiteral("nova-3");
   bool          diarize = false;
 
+  /// The model used when nothing else says otherwise, named once so the loader, the
+  /// dialog and the command line cannot disagree about it.
+  static QString defaultModel() { return QStringLiteral("nova-3"); }
+
+  /// Reads a setting that has no meaningful empty value.
+  ///
+  /// QSettings returns a stored empty string in preference to the default, so a key
+  /// that is present but blank silently overrides it. For a model name that is fatal
+  /// and almost invisible: an empty model reaches the engine as `model=`, and Deepgram
+  /// answers 403 with a message about project permissions rather than about the model
+  /// being missing, which sends the reader looking at their account.
+  static QString nonEmpty(QSettings& stored, const QString& key, const QString& fallback)
+  {
+    const auto value = stored.value(key, fallback).toString().trimmed();
+    return value.isEmpty() ? fallback : value;
+  }
+
   /// Where the stored settings live, so the UI can say so rather than being mysterious.
   static QString path()
   {
@@ -50,9 +67,9 @@ struct Settings
     out.port = static_cast<std::uint16_t>(
         stored.value(QStringLiteral("server/port"), int(Core::kDefaultPort)).toInt());
     out.token     = stored.value(QStringLiteral("server/token")).toString();
-    out.outputDir = stored.value(QStringLiteral("server/outputDir"),
-                                 QDir::current().filePath(QStringLiteral("out"))).toString();
-    out.model   = stored.value(QStringLiteral("deepgram/model"), QStringLiteral("nova-3")).toString();
+    out.outputDir = nonEmpty(stored, QStringLiteral("server/outputDir"),
+                             QDir::current().filePath(QStringLiteral("out")));
+    out.model   = nonEmpty(stored, QStringLiteral("deepgram/model"), defaultModel());
     out.diarize = stored.value(QStringLiteral("deepgram/diarize"), false).toBool();
 
     // The environment wins: someone who exported the key this session means it.

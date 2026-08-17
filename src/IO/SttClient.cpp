@@ -22,7 +22,20 @@ SttClient::SttClient(SttConfig cfg, Core::Stream::Value stream, QObject* parent)
     // Asking the engine to close and then seeing the socket close is not a fault;
     // reporting it would train the reader to ignore genuine failures.
     if (closing_) return;
-    emit failed(socket_.errorString());
+
+    // Qt reports a rejected upgrade as "Unhandled http status code", which gives the
+    // number and nothing that helps. The two that actually happen have precise causes,
+    // and each reads like the other at first glance: 401 is the key, 403 is the model.
+    // An empty model is refused as a project-permissions error, which sends the reader
+    // to their account page instead of to their settings.
+    auto detail = socket_.errorString();
+    if (detail.contains(QStringLiteral("401")))
+      detail += QStringLiteral(" — the API key was rejected.");
+    else if (detail.contains(QStringLiteral("403")))
+      detail += QStringLiteral(" — the key is valid but the model '%1' was refused.")
+                    .arg(cfg_.model.isEmpty() ? QStringLiteral("(empty)") : cfg_.model);
+
+    emit failed(detail);
   });
 }
 

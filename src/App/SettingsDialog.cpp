@@ -102,7 +102,11 @@ Settings SettingsDialog::result() const
   out.token     = token_->text().trimmed();
   out.outputDir = outputDir_->text().trimmed();
   out.apiKey    = apiKey_->text().trimmed();
+  // A blank field means "whatever the default is", not "no model". Saving the blank
+  // writes a key that overrides the default on every later load, and the engine rejects
+  // an empty model with a message about account permissions — nowhere near the cause.
   out.model     = model_->text().trimmed();
+  if (out.model.isEmpty()) out.model = Settings::defaultModel();
   out.diarize   = diarize_->isChecked();
   return out;
 }
