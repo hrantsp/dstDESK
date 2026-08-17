@@ -7,7 +7,9 @@
 #ifndef DST_DESK_IO_WSSERVER_HPP
 #define DST_DESK_IO_WSSERVER_HPP
 
+#include <QDateTime>
 #include <QObject>
+#include <QTimer>
 #include <QString>
 #include <QStringList>
 #include <QWebSocketServer>
@@ -92,6 +94,14 @@ private:
 
     Core::TranscriptMerger transcript;
 
+    // When each stream's engine last said anything. A stream that has gone quiet for
+    // longer than the timeout is treated as stalled so it stops holding the transcript
+    // back — judged on the engine's silence over wall time, never on how far behind the
+    // transcript is, because during a long sentence that distance is just the length of
+    // the sentence.
+    std::array<QDateTime, 2> lastResult;
+    QTimer*                  stallWatch = nullptr;
+
     // Teardown is two-phase: the engine is asked to finalise, and the session is only
     // destroyed once it has answered. Doing it in one step drops the last utterance.
     bool closing     = false;
@@ -109,6 +119,13 @@ private:
   void handleBye        ();
 
   void startTranscription(Core::Stream::Value stream, std::uint32_t firstSampleIndex);
+  void noteAlive(Core::Stream::Value stream);
+  void checkForStalls();
+
+  // Even a stream carrying pure silence is finalised every few seconds, so total quiet
+  // for this long is a broken connection rather than a quiet room. Deliberately far
+  // above the longest plausible sentence, since a long sentence is not a stall.
+  static constexpr qint64 kStallAfterMs = 20000;
   void drainTranscript();
   void emitUtterance(const Core::Utterance& utterance);
 

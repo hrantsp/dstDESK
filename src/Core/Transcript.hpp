@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 #include "Protocol.hpp"
@@ -37,6 +39,7 @@ public:
   void openStream(Stream::Value stream)
   {
     finalizedUpTo_[stream] = 0.0;
+    stalled_.erase(stream);
     live_.erase(stream);
   }
 
@@ -45,6 +48,7 @@ public:
   void closeStream(Stream::Value stream)
   {
     finalizedUpTo_.erase(stream);
+    stalled_.erase(stream);
     live_.erase(stream);
   }
 
@@ -55,6 +59,13 @@ public:
   {
     auto it = finalizedUpTo_.find(stream);
     if (it == finalizedUpTo_.end()) return; // stream not open
+
+    // A final describing audio this stream has already finalised is a duplicate. The
+    // engine delivers finals in order over a single connection, so the only way to see
+    // one is for a second source to be speaking for this stream — a stale connection
+    // finalising its buffered tail after being replaced, say. Accepting it would repeat
+    // text the reader has already been shown, at a time that no longer matches.
+    if (!text.empty() && end <= it->second) return;
 
     it->second = std::max(it->second, end);
     live_.erase(stream);
@@ -76,14 +87,39 @@ public:
     else              live_[stream] = Utterance{ stream, start, start, std::move(text), 0.0 };
   }
 
-  /// Seconds up to which every open stream has finalised.
+  /// Marks a stream as producing nothing at all, so it stops holding the watermark
+  /// back. A stalled stream is treated like a closed one until it speaks again.
+  ///
+  /// The caller decides this from the engine's silence over wall-clock time, not from
+  /// how far behind the transcript is. Those are different things, and confusing them
+  /// was a real bug: during a long sentence the finalised position legitimately trails
+  /// the audio by the whole length of that sentence, so any rule based on that distance
+  /// fires during ordinary speech and commits text out of order.
+  void setStalled(Stream::Value stream, bool stalled)
+  {
+    if (!finalizedUpTo_.contains(stream)) return;
+    if (stalled) stalled_.insert(stream);
+    else         stalled_.erase(stream);
+  }
+
+  /// Seconds up to which every open, responding stream has finalised.
+  ///
+  /// A stream whose transcription has died would otherwise hold the minimum down
+  /// forever and the transcript would stop advancing while the other stream kept
+  /// producing text — the worst failure this class can have, because it looks exactly
+  /// like the application being broken. Excluding a stalled stream avoids that without
+  /// weakening the ordering guarantee for streams that are actually working.
   double watermark() const
   {
-    if (finalizedUpTo_.empty()) return 0.0;
+    auto lowest = std::optional<double>{};
+    for (const auto& [stream, finalized] : finalizedUpTo_)
+    {
+      if (stalled_.contains(stream)) continue;
+      lowest = lowest.has_value() ? std::min(*lowest, finalized) : finalized;
+    }
 
-    double lowest = finalizedUpTo_.begin()->second;
-    for (const auto& [stream, upTo] : finalizedUpTo_) lowest = std::min(lowest, upTo);
-    return lowest;
+    // Every stream stalled: nothing can be ordered against anything, so hold.
+    return std::max(0.0, lowest.value_or(0.0));
   }
 
   /// Utterances that can no longer be reordered, in conversational order. Each is
@@ -135,6 +171,7 @@ public:
 
 private:
   std::map<Stream::Value, double>    finalizedUpTo_;
+  std::set<Stream::Value>            stalled_;
   std::map<Stream::Value, Utterance> live_;
   std::vector<Utterance>             pending_;
 };

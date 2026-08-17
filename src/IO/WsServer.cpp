@@ -282,25 +282,50 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
 
   auto* client = new SttClient(cfg_.stt, stream, this);
   session_->stt[slot] = client;
+  session_->lastResult[slot] = QDateTime::currentDateTimeUtc();
+
+  if (session_->stallWatch == nullptr)
+  {
+    session_->stallWatch = new QTimer(this);
+    connect(session_->stallWatch, &QTimer::timeout, this, &WsServer::checkForStalls);
+    session_->stallWatch->start(2000);
+  }
+
+  // Which session this client belongs to. A replaced session leaves its old clients
+  // still connected and still finalising whatever they had buffered, and without this
+  // check that tail lands in the *new* session's transcript — stamped with the old
+  // client's time origin, so it appears as a duplicate several seconds adrift.
+  auto* owner = session_.get();
+
+  const auto mine = [this, owner] { return session_ && session_.get() == owner; };
 
   connect(client, &SttClient::finalResult, this,
-          [this, stream](double start, double end, QString text, double confidence)
+          [this, mine, stream](double start, double end, QString text, double confidence)
   {
-    if (!session_) return;
+    if (!mine()) return;
+    noteAlive(stream);
     session_->transcript.addFinal(stream, start, end, text.toStdString(), confidence);
+
+    // A final supersedes whatever interim was showing for this stream, so the live row
+    // has to be told. The merger drops its own copy, but without this the last interim
+    // stays on screen for the rest of the session — including after it ends.
+    emit interimChanged(stream, QString());
+
     drainTranscript();
   });
 
-  connect(client, &SttClient::interimResult, this, [this, stream](double start, QString text)
+  connect(client, &SttClient::interimResult, this,
+          [this, mine, stream](double start, QString text)
   {
-    if (!session_) return;
+    if (!mine()) return;
+    noteAlive(stream);
     session_->transcript.setInterim(stream, start, text.toStdString());
     emit interimChanged(stream, text);
   });
 
-  connect(client, &SttClient::finished, this, [this, stream]
+  connect(client, &SttClient::finished, this, [this, mine, stream]
   {
-    if (!session_) return;
+    if (!mine()) return;
 
     // Now, and only now, can nothing further arrive for this stream. Releasing it
     // here also lets the watermark advance past it so the other stream can commit.
@@ -312,13 +337,47 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
 
   connect(client, &SttClient::failed, this, [this, stream](QString reason)
   {
+    // Surfaced rather than only logged: a stream whose transcription has died still
+    // records audio perfectly, so nothing else about the session looks wrong.
     qWarning("Transcription failed for %s: %s", Core::Stream::label(stream),
              qUtf8Printable(reason));
+    emit notice(QStringLiteral("Transcription stopped for %1: %2")
+                    .arg(QString::fromLatin1(Core::Stream::label(stream)), reason));
   });
 
   // The engine counts from the first audio it receives, so this frame's position on
   // the shared capture clock is the offset for every time it later reports.
   client->start(double(firstSampleIndex) / double(Core::kSampleRate));
+}
+
+void WsServer::noteAlive(Core::Stream::Value stream)
+{
+  if (!session_) return;
+  const auto slot = indexOf(stream);
+  session_->lastResult[slot] = QDateTime::currentDateTimeUtc();
+  session_->transcript.setStalled(stream, false);
+}
+
+void WsServer::checkForStalls()
+{
+  if (!session_) return;
+
+  const auto now = QDateTime::currentDateTimeUtc();
+
+  for (std::size_t slot = 0; slot < session_->stt.size(); ++slot)
+  {
+    if (session_->stt[slot] == nullptr || !session_->opened[slot]) continue;
+
+    const auto quietFor = session_->lastResult[slot].msecsTo(now);
+
+    if (quietFor > kStallAfterMs)
+    {
+      // Well beyond anything normal: even a silent stream is finalised every few
+      // seconds, so total quiet for this long means the connection is not working.
+      session_->transcript.setStalled(static_cast<Core::Stream::Value>(slot), true);
+      drainTranscript();
+    }
+  }
 }
 
 void WsServer::emitUtterance(const Core::Utterance& utterance)
@@ -412,8 +471,29 @@ void WsServer::finishSession()
   // end, this is usually the last thing that was said.
   for (const auto& utterance : session_->transcript.flush()) emitUtterance(utterance);
 
+  // Nothing further can arrive, so any interim still showing is now stale. It was
+  // never committed text and must not be left looking like it was.
+  emit interimChanged(Core::Stream::Mic, QString());
+  emit interimChanged(Core::Stream::Tab, QString());
+
   reportSession();
-  emit sessionEnded();
+
+  // Only for a session that actually began. A client that connects and never
+  // handshakes would otherwise make the window announce the end of something it never
+  // reported the start of.
+  if (session_->helloDone) emit sessionEnded();
+
+  // Parented to the server, so without this they would accumulate for its whole life,
+  // each one still connected to the engine. Disconnected first because this may run
+  // from inside one of their own signals.
+  for (auto*& client : session_->stt)
+  {
+    if (client == nullptr) continue;
+    client->disconnect(this);
+    client->finish();
+    client->deleteLater();
+    client = nullptr;
+  }
 
   if (session_->socket != nullptr)
   {

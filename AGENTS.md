@@ -77,7 +77,7 @@ the generator validates the specification itself: header fields must be contiguo
 declared sizes must agree, and the header length must stay even so the `int16` payload
 is not misaligned.
 
-Changing the wire format means changing `protocol.json` **and** `rec/PROTOCOL.md`
+Changing the wire format means changing `rec/protocol.json` **and** `rec/PROTOCOL.md`
 together, and bumping `protocolVersion` if the change is not backward compatible.
 
 ### The timing model

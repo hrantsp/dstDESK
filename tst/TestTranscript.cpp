@@ -160,3 +160,121 @@ TEST_CASE("the merged order matches the measured two-stream session", "[transcri
   });
   CHECK(merger.pendingCount() == 0);
 }
+
+TEST_CASE("an interim left unfinalised does not linger as live text", "[transcript]")
+{
+  // What happens when audio stops mid-sentence: an interim exists, then the stream
+  // is closed. The merger must not keep presenting a guess as current, because on
+  // screen it is indistinguishable from someone still speaking.
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+  merger.openStream(Stream::Tab);
+
+  merger.setInterim(Stream::Tab, 4.0, "built into this to really enhance that image");
+  REQUIRE(merger.live().contains(Stream::Tab));
+
+  merger.closeStream(Stream::Tab);
+  CHECK_FALSE(merger.live().contains(Stream::Tab));
+}
+
+TEST_CASE("a final clears the interim it supersedes", "[transcript]")
+{
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+
+  merger.setInterim(Stream::Mic, 1.0, "half a thought");
+  REQUIRE(merger.live().contains(Stream::Mic));
+
+  // Even an empty final — the engine finalising silence — settles that span, so the
+  // guess for it is no longer current.
+  merger.addFinal(Stream::Mic, 1.0, 2.0, "");
+  CHECK_FALSE(merger.live().contains(Stream::Mic));
+}
+
+
+
+TEST_CASE("a final for already-finalised audio is a duplicate and is dropped",
+          "[transcript]")
+{
+  // The observed symptom: a word reappearing on its own, seconds adrift. It came from
+  // a superseded connection finalising its buffered tail into the current transcript.
+  // The engine sends finals in order, so one that ends inside settled audio cannot be
+  // new.
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+  merger.openStream(Stream::Tab);
+
+  merger.addFinal(Stream::Tab, 20.0, 30.0,
+                  "Brand new design, lots of features");
+  merger.addFinal(Stream::Mic, 0.0, 40.0, "");
+
+  CHECK(textsOf(merger.takeCommitted()) ==
+        std::vector<std::string>{ "Brand new design, lots of features" });
+
+  // The straggler, describing audio inside what was already settled.
+  merger.addFinal(Stream::Tab, 28.0, 29.5, "features.");
+  CHECK(merger.takeCommitted().empty());
+  CHECK(merger.pendingCount() == 0);
+}
+
+TEST_CASE("a stalled stream cannot freeze the transcript forever", "[transcript]")
+{
+  // One stream keeps producing text while the other's transcription dies. As a plain
+  // minimum the dead stream pins the watermark and nothing is ever committed again —
+  // on screen, indistinguishable from the application being broken.
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+  merger.openStream(Stream::Tab);
+
+  merger.addFinal(Stream::Mic, 0.0, 2.0, "");
+  merger.addFinal(Stream::Tab, 10.0, 12.0, "still talking");
+  REQUIRE(merger.takeCommitted().empty()); // correctly held while both are alive
+
+  merger.setStalled(Stream::Mic, true);
+  CHECK(merger.watermark() == 12.0);
+  CHECK(textsOf(merger.takeCommitted()) == std::vector<std::string>{ "still talking" });
+}
+
+TEST_CASE("a stream that recovers holds the watermark again", "[transcript]")
+{
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+  merger.openStream(Stream::Tab);
+
+  merger.setStalled(Stream::Mic, true);
+  merger.addFinal(Stream::Tab, 0.0, 5.0, "");
+  CHECK(merger.watermark() == 5.0);
+
+  // Speaking again means it can once more produce something earlier than the other
+  // stream, so its position must count.
+  merger.setStalled(Stream::Mic, false);
+  CHECK(merger.watermark() == 0.0);
+}
+
+TEST_CASE("a long utterance does not provoke out-of-order commits", "[transcript]")
+{
+  // Replays the shape that a five-minute run actually produced. One stream delivers a
+  // twelve-second sentence, so its finalised position trails the audio by twelve
+  // seconds; meanwhile the other stream finalises several short lines. Any rule that
+  // treats "far behind the audio" as a stall commits those short lines first and then
+  // has to place the long one before them — which is the scrambling this class exists
+  // to prevent.
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+  merger.openStream(Stream::Tab);
+
+  // The microphone keeps up with short lines.
+  merger.addFinal(Stream::Mic, 40.0, 42.0, "short one");
+  merger.addFinal(Stream::Mic, 42.0, 44.0, "short two");
+
+  // The meeting stream is midway through a long sentence and has finalised nothing
+  // past 39 s, so nothing may be committed past that yet.
+  merger.addFinal(Stream::Tab, 27.0, 39.0, "Gentlemen, I have no intention of killing Hitler");
+  CHECK(textsOf(merger.takeCommitted()) ==
+        std::vector<std::string>{ "Gentlemen, I have no intention of killing Hitler" });
+
+  // Only once the meeting stream passes them do the short lines follow, in order.
+  merger.addFinal(Stream::Tab, 39.0, 45.0, "");
+  CHECK(textsOf(merger.takeCommitted()) ==
+        std::vector<std::string>{ "short one", "short two" });
+}
