@@ -209,22 +209,28 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/deploy/qt.conf" DESTINATION ${CMAKE_I
 # Qt's TLS plugin opens OpenSSL by name; Qt bundles none. Shipping the one Conan
 # resolved makes secure connections a property of the package rather than of whatever
 # the receiving machine happens to have. See decision 12 in dstOMNI/DESIGN.md.
-find_package(OpenSSL REQUIRED)
-# Conan's OpenSSL targets are interface aggregates rather than imported libraries, so
-# IMPORTED_RUNTIME_ARTIFACTS does not apply; the files are taken from the package
-# directory CMakeDeps reports. Only shared builds need shipping — a static OpenSSL is
-# already inside whatever linked it, and nothing here links it at all.
-if(DEFINED openssl_LIB_DIRS_RELEASE)
-    file(GLOB DSTDESK_OPENSSL_RUNTIME
-         "${openssl_LIB_DIRS_RELEASE}/libssl${CMAKE_SHARED_LIBRARY_SUFFIX}*"
-         "${openssl_LIB_DIRS_RELEASE}/libcrypto${CMAKE_SHARED_LIBRARY_SUFFIX}*")
-    if(DSTDESK_OPENSSL_RUNTIME)
-        install(FILES ${DSTDESK_OPENSSL_RUNTIME} DESTINATION lib)
-    else()
-        message(STATUS
-            "OpenSSL resolved to a static build, so nothing is shipped for it. The "
-            "packaged application will use whatever OpenSSL the target machine has, "
-            "and dstdesk --selftest reports whether that works.")
+#
+# Not on Windows, where Qt ships a Schannel backend and uses the platform's own TLS
+# stack. There is nothing to ship, and the recipe does not require OpenSSL at all, so
+# asking for it here would fail the configure step.
+if(NOT WIN32)
+    find_package(OpenSSL REQUIRED)
+    # Conan's OpenSSL targets are interface aggregates rather than imported libraries,
+    # so IMPORTED_RUNTIME_ARTIFACTS does not apply; the files are taken from the package
+    # directory CMakeDeps reports. Only shared builds need shipping — a static OpenSSL
+    # is already inside whatever linked it, and nothing here links it at all.
+    if(DEFINED openssl_LIB_DIRS_RELEASE)
+        file(GLOB DSTDESK_OPENSSL_RUNTIME
+             "${openssl_LIB_DIRS_RELEASE}/libssl${CMAKE_SHARED_LIBRARY_SUFFIX}*"
+             "${openssl_LIB_DIRS_RELEASE}/libcrypto${CMAKE_SHARED_LIBRARY_SUFFIX}*")
+        if(DSTDESK_OPENSSL_RUNTIME)
+            install(FILES ${DSTDESK_OPENSSL_RUNTIME} DESTINATION lib)
+        else()
+            message(STATUS
+                "OpenSSL resolved to a static build, so nothing is shipped for it. The "
+                "packaged application will use whatever OpenSSL the target machine has, "
+                "and dstdesk --selftest reports whether that works.")
+        endif()
     endif()
 endif()
 
