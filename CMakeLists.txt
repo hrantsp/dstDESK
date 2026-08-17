@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(dstDESK VERSION 1.0.4 LANGUAGES CXX)
+project(dstDESK VERSION 1.0.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -109,6 +109,21 @@ if(MSVC)
 else()
     target_compile_options(dstdesk PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# Where Qt's runtime lives, recorded beside the executable at configure time.
+#
+# ELF and Mach-O binaries carry a search path, so a build-tree binary finds the Qt it
+# was linked against and simply runs. Windows has no equivalent: the loader looks in the
+# executable's own directory and then along PATH, so the same binary fails with
+# "Qt6Widgets.dll was not found" — a message that names a symptom and no cause. Writing
+# the directory here lets `dst.py run` prepend it, which beats asking Conan at run time
+# where the package landed: this is the path the linker actually used.
+#
+# Written on every platform, not only Windows, so the mechanism can be exercised
+# wherever the project is developed rather than only where it is needed.
+file(GENERATE
+     OUTPUT "$<TARGET_FILE_DIR:dstdesk>/qt-runtime-dir.txt"
+     CONTENT "$<TARGET_FILE_DIR:Qt6::Core>")
 
 # ── Simulator ────────────────────────────────────────────────────────────────
 # A separate executable, not a mode of dstdesk. It is a client of the protocol —
