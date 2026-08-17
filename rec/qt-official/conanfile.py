@@ -36,8 +36,14 @@ class QtOfficialConan(ConanFile):
     topics = ("qt", "gui", "websockets")
 
     settings = "os", "arch", "compiler", "build_type"
-    options = {"modules": ["ANY"]}
-    default_options = {"modules": "qtwebsockets"}
+    options = {"modules": ["ANY"], "archives": ["ANY"]}
+
+    # aqt installs a broad default set. Restricting it to what this project links —
+    # Core, Gui, Widgets and Network all live in qtbase — leaves out Quick and QML,
+    # which alone account for 1.1 GB of the 1.3 GB of libraries and contain the
+    # deepest paths in the tree. That last part matters on Windows, where a deep
+    # install plus a deep cache path runs into the 260-character MAX_PATH limit.
+    default_options = {"modules": "qtwebsockets", "archives": "qtbase icu"}
 
     # aqt host name per Conan os, and the architecture identifier it expects.
     # Verified against `aqt list-qt <host> desktop --arch <version>`.
@@ -77,10 +83,13 @@ class QtOfficialConan(ConanFile):
         # `sys.executable -m aqt` binds to the interpreter running Conan, so aqtinstall
         # is picked up from the same environment Conan was installed into. Invoking a
         # bare `aqt` would depend on PATH ordering instead.
+        archives = str(self.options.archives).split()
         cmd = (
             f'"{sys.executable}" -m aqt install-qt '
             f"{host} desktop {self.version} {arch} "
-            f"-m {self.options.modules} -O \"{outdir}\""
+            f"-m {self.options.modules} "
+            + (f"--archives {' '.join(archives)} " if archives else "")
+            + f"-O \"{outdir}\""
         )
         self.output.info(f"Fetching official Qt: {cmd}")
         try:
