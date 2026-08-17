@@ -110,6 +110,23 @@ else()
     target_compile_options(dstdesk PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# A windowed application on each platform's own terms.
+#
+# Without WIN32_EXECUTABLE the binary is a console application, so every launch — a
+# double-click included — brings up an empty black window beside the real one. Without
+# MACOSX_BUNDLE it is a plain Unix executable, which macOS cannot launch by
+# double-click at all, and the DragNDrop package would carry a bare binary rather than
+# something a reviewer can drag into Applications.
+#
+# dstsim is deliberately left alone: it is a console tool, and its output is the point.
+set_target_properties(dstdesk PROPERTIES
+    WIN32_EXECUTABLE TRUE
+    MACOSX_BUNDLE    TRUE
+    MACOSX_BUNDLE_BUNDLE_NAME      "dstDESK"
+    MACOSX_BUNDLE_BUNDLE_VERSION   "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_GUI_IDENTIFIER   "com.hrantsp.dstdesk")
+
 # Where Qt's runtime lives, recorded beside the executable at configure time.
 #
 # ELF and Mach-O binaries carry a search path, so a build-tree binary finds the Qt it

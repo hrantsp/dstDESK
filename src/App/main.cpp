@@ -15,7 +15,31 @@
 #include "Settings.hpp"
 #include "SelfTest.hpp"
 
+#ifdef Q_OS_WIN
+#  include <windows.h>
+#  include <cstdio>
+#endif
+
 namespace {
+
+#ifdef Q_OS_WIN
+/// Reconnects standard output to the console that started this process, if there is one.
+///
+/// The application is built for the windows subsystem, so no console is created for it
+/// and --headless and --selftest would otherwise print into nothing. Attaching to the
+/// parent's console restores them; a double-click has no parent console, the call fails
+/// harmlessly, and the launch stays clean. Which is the whole point of the subsystem
+/// choice: the console appears when it was asked for, and never otherwise.
+void attachParentConsole()
+{
+  if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+
+  auto* stream = static_cast<FILE*>(nullptr);
+  freopen_s(&stream, "CONOUT$", "w", stdout);
+  freopen_s(&stream, "CONOUT$", "w", stderr);
+  freopen_s(&stream, "CONIN$",  "r", stdin);
+}
+#endif
 
 volatile std::sig_atomic_t gInterrupted = 0;
 
@@ -59,6 +83,11 @@ bool wantsHeadless(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+#ifdef Q_OS_WIN
+  // Before anything writes a byte, so the first line is not the one that is lost.
+  attachParentConsole();
+#endif
+
   const bool headless = wantsHeadless(argc, argv);
 
   auto app = headless
