@@ -102,7 +102,19 @@ class QtOfficialConan(ConanFile):
         macos). Rather than maintaining a second mapping that can silently rot, the
         prefix is discovered by looking for Qt's own CMake package config.
         """
-        hits = glob.glob(os.path.join(outdir, "**", "lib", "cmake", "Qt6"), recursive=True)
+        # Two levels deep, not a recursive walk. aqt always lays the tree out as
+        # <outdir>/<version>/<folder>, so the depth is known; walking the whole tree
+        # instead means visiting every directory of a 1.6 GB Qt install, which on
+        # Windows — with a virus scanner inspecting each access — takes many minutes
+        # and looks exactly like a hang.
+        hits = glob.glob(os.path.join(outdir, "*", "*", "lib", "cmake", "Qt6"))
+
+        # Only if that assumption ever stops holding is the expensive search worth it.
+        if not hits:
+            self.output.warning("Qt is not laid out as <version>/<folder>; searching the "
+                                "whole tree, which is slow.")
+            hits = glob.glob(os.path.join(outdir, "**", "lib", "cmake", "Qt6"), recursive=True)
+
         if not hits:
             raise ConanException(
                 f"Qt was downloaded to {outdir} but no lib/cmake/Qt6 was found in it. "
