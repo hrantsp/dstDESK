@@ -29,10 +29,8 @@ SttClient::SttClient(SttConfig cfg, Core::Stream::Value stream, QObject* parent)
     // An empty model is refused as a project-permissions error, which sends the reader
     // to their account page instead of to their settings.
     auto detail = socket_.errorString();
-    if (detail.contains(QStringLiteral("401")))
-      detail += QStringLiteral(" — the API key was rejected.");
-    else if (detail.contains(QStringLiteral("403")))
-      detail += QStringLiteral(" — the key is valid but the model '%1' was refused.")
+    if      (detail.contains(QStringLiteral("401"))) detail += QStringLiteral(" — the API key was rejected.");
+    else if (detail.contains(QStringLiteral("403"))) detail += QStringLiteral(" — the key is valid but the model '%1' was refused.")
                     .arg(cfg_.model.isEmpty() ? QStringLiteral("(empty)") : cfg_.model);
 
     emit failed(detail);
