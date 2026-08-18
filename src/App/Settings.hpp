@@ -32,6 +32,21 @@ struct Settings
   QString       model   = QStringLiteral("nova-3");
   bool          diarize = false;
 
+  /// Where recordings go when nothing else says otherwise.
+  ///
+  /// Not the working directory. A launch from Finder or Explorer has no meaningful one —
+  /// macOS starts an application in "/" — so "out" relative to it resolved to "/out",
+  /// which cannot be created. The self-test then failed and the application refused to
+  /// start, with the explanation going to a console that a double-clicked application
+  /// does not have: indistinguishable from an immediate crash.
+  static QString defaultOutputDir()
+  {
+    const auto documents =
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const auto base = documents.isEmpty() ? QDir::homePath() : documents;
+    return QDir(base).filePath(QStringLiteral("Kobayashi"));
+  }
+
   /// The model used when nothing else says otherwise, named once so the loader, the
   /// dialog and the command line cannot disagree about it.
   static QString defaultModel() { return QStringLiteral("nova-3"); }
@@ -73,8 +88,7 @@ struct Settings
     out.port = static_cast<std::uint16_t>(
         stored.value(QStringLiteral("server/port"), int(Core::kDefaultPort)).toInt());
     out.token     = stored.value(QStringLiteral("server/token")).toString();
-    out.outputDir = nonEmpty(stored, QStringLiteral("server/outputDir"),
-                             QDir::current().filePath(QStringLiteral("out")));
+    out.outputDir = nonEmpty(stored, QStringLiteral("server/outputDir"), defaultOutputDir());
     out.model   = nonEmpty(stored, QStringLiteral("deepgram/model"), defaultModel());
     out.diarize = stored.value(QStringLiteral("deepgram/diarize"), false).toBool();
 

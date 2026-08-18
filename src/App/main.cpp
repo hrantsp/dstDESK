@@ -4,6 +4,8 @@
 #include <QTextStream>
 #include <QApplication>
 #include <QGuiApplication>
+#include <QMessageBox>
+#include <QPalette>
 #include <QIcon>
 #include <QProcessEnvironment>
 #include <QSettings>
@@ -107,6 +109,32 @@ int main(int argc, char** argv)
   // machines with no display at all.
   if (!headless)
   {
+    // Fusion with an explicit light palette, on every platform.
+    //
+    // The window paints its own light surfaces, and left the controls inside them to the
+    // native style — which on macOS in dark mode draws light text, invisible on a forced
+    // white background though still perfectly clickable. Half a theme is worse than
+    // either whole one. Fusion honours the palette everywhere, so the application looks
+    // the same on all three platforms and what is verified on one predicts the others.
+    QApplication::setStyle(QStringLiteral("Fusion"));
+
+    auto palette = QPalette{};
+    palette.setColor(QPalette::Window,          QColor(0xfa, 0xfa, 0xfa));
+    palette.setColor(QPalette::WindowText,      QColor(0x20, 0x20, 0x20));
+    palette.setColor(QPalette::Base,            QColor(0xff, 0xff, 0xff));
+    palette.setColor(QPalette::AlternateBase,   QColor(0xf6, 0xf6, 0xf6));
+    palette.setColor(QPalette::Text,            QColor(0x20, 0x20, 0x20));
+    palette.setColor(QPalette::Button,          QColor(0xf2, 0xf2, 0xf2));
+    palette.setColor(QPalette::ButtonText,      QColor(0x20, 0x20, 0x20));
+    palette.setColor(QPalette::ToolTipBase,     QColor(0xff, 0xff, 0xff));
+    palette.setColor(QPalette::ToolTipText,     QColor(0x20, 0x20, 0x20));
+    palette.setColor(QPalette::PlaceholderText, QColor(0x9a, 0x9a, 0x9a));
+    palette.setColor(QPalette::Highlight,       QColor(0x3a, 0x5a, 0x8c));
+    palette.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
+    palette.setColor(QPalette::Disabled, QPalette::Text,       QColor(0xa0, 0xa0, 0xa0));
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0xa0, 0xa0, 0xa0));
+    QApplication::setPalette(palette);
+
     // Wayland gives a window no icon of its own: the compositor matches the window to
     // an installed .desktop entry by application id and takes the icon from there, so
     // setWindowIcon alone leaves a generic tile in the dock however many sizes it
@@ -208,6 +236,25 @@ int main(int argc, char** argv)
   {
     QTextStream(stderr) << "Refusing to start — this machine is not ready:" << Qt::endl;
     DST::DESK::App::printSelfTest(report);
+
+    // On screen as well, because a launch from Finder or Explorer has no console: the
+    // application would exit at once with its reasons written nowhere, which reads as an
+    // immediate crash and sends the reader looking for a crash log that does not exist.
+    // Not on the offscreen platform, which is what automated checks run on: a modal box
+    // waits for a click that will never come, so the process hangs instead of exiting and
+    // a smoke test reports a timeout rather than the failure it was looking for.
+    if (!headless && QGuiApplication::platformName() != QStringLiteral("offscreen"))
+    {
+      auto reasons = QStringList{};
+      for (const auto& check : report.checks)
+        if (!check.passed)
+          reasons << QStringLiteral("• %1: %2\n   %3")
+                         .arg(check.name, check.detail, check.remedy);
+
+      QMessageBox::critical(nullptr, QObject::tr("Kobayashi cannot start"),
+                            QObject::tr("This machine is not ready:\n\n%1")
+                                .arg(reasons.join(QStringLiteral("\n\n"))));
+    }
     return 1;
   }
 
