@@ -81,6 +81,45 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network WebSockets)
 
 set(CMAKE_AUTOMOC ON)
 
+# Qt 6.8's official macOS binaries name the AGL framework in their link interface, and
+# Apple removed AGL from the SDK — so linking any Qt GUI target fails on a current Xcode
+# with "ld: framework 'AGL' not found". Nothing here wants it: AGL is a legacy OpenGL
+# surface API, and this application draws with Widgets.
+#
+# It is stripped from the interface of every Qt target this project touches, in whichever
+# form it takes — a bare name, an imported target, or a resolved .framework path — and
+# from the private interfaces too, since that is where a framework dependency usually
+# hides. A no-op when it is not there, which is every other platform and every Qt build
+# that has already dropped it.
+if(APPLE)
+    function(kobayashi_strip_agl target)
+        if(NOT TARGET ${target})
+            return()
+        endif()
+        foreach(property INTERFACE_LINK_LIBRARIES IMPORTED_LINK_INTERFACE_LIBRARIES)
+            get_target_property(libraries ${target} ${property})
+            if(NOT libraries)
+                continue()
+            endif()
+            set(kept "")
+            foreach(library IN LISTS libraries)
+                if(library MATCHES "(^|[:/ ])AGL(\\.framework)?$")
+                    message(STATUS "Dropping AGL from ${target}: ${library}")
+                    continue()
+                endif()
+                list(APPEND kept "${library}")
+            endforeach()
+            set_property(TARGET ${target} PROPERTY ${property} "${kept}")
+        endforeach()
+    endfunction()
+
+    foreach(qt_target Qt6::Core       Qt6::Gui        Qt6::Widgets
+                      Qt6::Network    Qt6::WebSockets Qt6::OpenGL
+                      Qt6::CorePrivate Qt6::GuiPrivate Qt6::WidgetsPrivate)
+        kobayashi_strip_agl(${qt_target})
+    endforeach()
+endif()
+
 set(CMAKE_AUTORCC ON)
 
 add_executable(kobayashi
