@@ -84,7 +84,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 add_executable(kobayashi
-    res/kobayashi.qrc
+    rec/icons/kobayashi.qrc
     src/App/main.cpp
     src/App/SelfTest.cpp
     src/App/MainWindow.cpp
@@ -94,7 +94,7 @@ add_executable(kobayashi
     src/IO/SttClient.cpp)
 
 if(WIN32)
-    target_sources(kobayashi PRIVATE res/kobayashi.rc)
+    target_sources(kobayashi PRIVATE rec/icons/kobayashi.rc)
 endif()
 
 target_include_directories(kobayashi PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
@@ -138,9 +138,9 @@ set_target_properties(kobayashi PROPERTIES
 # A bundle reads its icon from Contents/Resources by the name in the plist above, so the
 # file has to be placed there as part of the target rather than installed alongside it.
 if(APPLE)
-    set_source_files_properties(res/kobayashi.icns PROPERTIES
+    set_source_files_properties(rec/icons/kobayashi.icns PROPERTIES
         MACOSX_PACKAGE_LOCATION "Resources")
-    target_sources(kobayashi PRIVATE res/kobayashi.icns)
+    target_sources(kobayashi PRIVATE rec/icons/kobayashi.icns)
 endif()
 
 # Where Qt's runtime lives, recorded beside the executable at configure time.
