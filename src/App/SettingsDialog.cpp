@@ -71,7 +71,7 @@ SettingsDialog::SettingsDialog(const Settings& current, std::uint16_t boundPort,
 
   note->setText(text);
 
-  connect(port_, &QSpinBox::valueChanged, this, [this, note, boundPort](int value)
+  connect(port_, &QSpinBox::valueChanged, this, [note, boundPort](int value)
   {
     QString text = tr("Saved to %1").arg(Settings::path());
     text += value != boundPort
