@@ -79,6 +79,14 @@ bool wantsHeadless(int argc, char** argv)
   {
     const auto arg = QString::fromLocal8Bit(argv[ii]);
     if (arg == QStringLiteral("--selftest") || arg == QStringLiteral("--headless")) return true;
+
+    // Help and version print text and exit. Building a QApplication for them means
+    // needing a display to ask what the flags are, so `kobayashi --help` over ssh, in a
+    // container, or in a packaged smoke test aborts instead of answering. The short
+    // forms are Qt's own, added by addHelpOption and addVersionOption.
+    if (arg == QStringLiteral("--help") || arg == QStringLiteral("--help-all")
+        || arg == QStringLiteral("-h") || arg == QStringLiteral("--version")
+        || arg == QStringLiteral("-v")) return true;
   }
   return false;
 }
