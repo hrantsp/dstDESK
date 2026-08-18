@@ -17,6 +17,10 @@
 
 namespace DST { namespace DESK { namespace Core {
 
+// HP:TODO: recordings are written in the clear. They are meeting audio, kept for as
+// long as the user leaves them there, and nothing here encrypts them or expires them.
+// Out of scope for an interview task; it would be the first thing to add for real use,
+// along with a retention policy that a user can actually see.
 class StreamRecorder
 {
 public:

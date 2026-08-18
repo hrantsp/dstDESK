@@ -12,6 +12,7 @@
 #define DST_DESK_APP_SETTINGS_HPP
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QSettings>
@@ -47,6 +48,11 @@ struct Settings
     const auto value = stored.value(key, fallback).toString().trimmed();
     return value.isEmpty() ? fallback : value;
   }
+
+  // HP:TODO: the API key is stored in plain text. The file is owner-only, which stops
+  // other local users reading it, and nothing stops a process running as this user. A
+  // real fix means the platform keychain — Credential Manager, Keychain, libsecret —
+  // which is three implementations and a fallback, and out of scope here.
 
   /// Where the stored settings live, so the UI can say so rather than being mysterious.
   static QString path()
@@ -97,6 +103,12 @@ struct Settings
     if (!keyFromEnvironment()) stored.setValue(QStringLiteral("deepgram/apiKey"), apiKey);
 
     stored.sync();
+
+    // This file holds an API key, and QSettings creates it at whatever the process
+    // umask allows — commonly world-readable. Narrowed after sync(), because the file
+    // does not exist until then. Windows ignores POSIX permission bits; its own
+    // per-user profile is what protects the file there.
+    QFile::setPermissions(path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
   }
 
 private:

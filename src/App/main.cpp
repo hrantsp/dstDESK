@@ -164,8 +164,9 @@ int main(int argc, char** argv)
 
   const auto originOption = QCommandLineOption(
       QStringLiteral("origin"),
-      QStringLiteral("Allowed Origin header, repeatable. Any origin is accepted when "
-                     "none is given."),
+      QStringLiteral("Allowed Origin header, repeatable. Defaults to the Verbal "
+                     "extension's own origin; a client sending no Origin at all, which "
+                     "means it is not a browser, is always accepted."),
       QStringLiteral("url"));
 
   parser.addOption(selfTestOption);
@@ -214,7 +215,12 @@ int main(int argc, char** argv)
   cfg.port           = static_cast<std::uint16_t>(port);
   cfg.outputDir      = outputDir;
   cfg.token          = parser.value(tokenOption);
+  // Defaults to the extension's own origin rather than to "anything". The id is fixed
+  // by the key pinned in dstORCH/manifest.json, so it can be stated in advance; before
+  // that it changed on every unpacked load, which is why this was open to begin with.
   cfg.allowedOrigins = parser.values(originOption);
+  if (cfg.allowedOrigins.isEmpty())
+    cfg.allowedOrigins = QStringList{ QString::fromLatin1(DST::DESK::Core::kExtensionOrigin) };
 
   // Transcription follows the key rather than a flag: a reviewer who sets
   // DEEPGRAM_API_KEY gets transcripts, and development without one still records.

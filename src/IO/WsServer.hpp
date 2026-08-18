@@ -135,6 +135,7 @@ private:
   void finishSession();
   void reportSession() const;
 
+  bool tokenMatches(const QString& offered) const;
   static const char* streamKey(Core::Stream::Value stream);
 
   ServerConfig             cfg_;

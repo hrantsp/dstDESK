@@ -33,7 +33,17 @@ WsServer::WsServer(ServerConfig cfg, QObject* parent)
   // looks like an unexplained drop.
   connect(&server_, &QWebSocketServer::originAuthenticationRequired, this, [this](QWebSocketCorsAuthenticator* auth)
   {
-    if (cfg_.allowedOrigins.isEmpty())
+    // An empty Origin means the client is not a browser, and is allowed.
+    //
+    // This looks like a hole and is not the one it looks like. A browser always sets
+    // Origin and page script can neither suppress nor forge it, so this check is what
+    // stands between a live session and any site the user happens to visit: a WebSocket
+    // to loopback needs no CORS preflight, so without it any page could displace the
+    // capture and stream its own audio in. A native process can omit the header, but a
+    // process already running as this user does not need a socket to do harm — and
+    // refusing it would break kobayashi-sim and the wire check, which are what make the
+    // protocol testable without a browser at all.
+    if (auth->origin().isEmpty())
     {
       auth->setAllowed(true);
       return;
@@ -63,8 +73,11 @@ bool WsServer::start()
 
   qInfo("Listening on ws://127.0.0.1:%u", server_.serverPort());
   qInfo("Recording into %s", qUtf8Printable(QDir::toNativeSeparators(cfg_.outputDir)));
+  // HP:TODO: no token by default. The origin check above is what actually keeps web
+  // pages out; a token would additionally authenticate native clients, and belongs with
+  // a way to provision it that is better than typing the same secret into two places.
   if (cfg_.token.isEmpty())      qInfo("No token required (development mode)");
-  if (cfg_.allowedOrigins.isEmpty()) qInfo("Any origin accepted (development mode)");
+  for (const auto& origin : cfg_.allowedOrigins) qInfo("Accepting browser origin %s", qUtf8Printable(origin));
   return true;
 }
 
@@ -75,6 +88,25 @@ void WsServer::updateConfig(const ServerConfig& cfg)
   const auto boundPort = cfg_.port;
   cfg_ = cfg;
   cfg_.port = boundPort;
+}
+
+bool WsServer::tokenMatches(const QString& offered) const
+{
+  // Constant time in the length of the configured token, so how far a guess got cannot
+  // be read off the reply. Over loopback that signal is buried in noise and this is
+  // close to ceremony — but it is a few lines, and comparing secrets with == is the
+  // habit worth not having.
+  const auto expected = cfg_.token.toUtf8();
+  const auto actual   = offered.toUtf8();
+
+  auto difference = static_cast<unsigned int>(expected.size() ^ actual.size());
+  for (qsizetype ii = 0; ii < expected.size(); ++ii)
+  {
+    const auto lhs = static_cast<unsigned char>(expected[ii]);
+    const auto rhs = ii < actual.size() ? static_cast<unsigned char>(actual[ii]) : 0u;
+    difference |= static_cast<unsigned int>(lhs ^ rhs);
+  }
+  return difference == 0;
 }
 
 const char* WsServer::streamKey(Core::Stream::Value stream)
@@ -94,6 +126,10 @@ void WsServer::onNewConnection()
   {
     // A reloaded extension leaves the previous socket briefly alive. Refusing the
     // newcomer would make reconnection impossible, so the newcomer wins.
+    // HP:TODO: an accepted client silently displaces a live session. Harmless while
+    // the only accepted browser origin is the extension's own, and wrong if the origin
+    // list is ever widened: the honest fix is to refuse the second client while a
+    // session is recording, and to say so on the socket rather than in a log line.
     qInfo("Replacing the existing session");
     closeSession();
   }
@@ -158,7 +194,7 @@ void WsServer::handleHello(const QJsonObject& msg)
     return;
   }
 
-  if (!cfg_.token.isEmpty() && msg.value(QStringLiteral("token")).toString() != cfg_.token)
+  if (!cfg_.token.isEmpty() && !tokenMatches(msg.value(QStringLiteral("token")).toString()))
   {
     rejectWith("invalid-token", Core::kCloseInvalidToken, QStringLiteral("token mismatch"));
     return;

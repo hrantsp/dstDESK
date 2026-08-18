@@ -100,6 +100,10 @@ def render_cpp(spec):
         f"inline constexpr double        kFrameMillis  = {duration_ms};",
         f"inline constexpr std::uint16_t kDefaultPort  = {spec['transport']['defaultPort']};",
         "",
+        "// The origin the server accepts unless told otherwise. Fixed by the 'key' in",
+        "// dstORCH/manifest.json, from which Chrome derives the extension id.",
+        f'inline constexpr auto kExtensionOrigin = "{spec["transport"]["extensionOrigin"]}";',
+        "",
         "// Byte offsets within the frame header.",
     ]
     for field in frame["fields"]:
@@ -182,6 +186,7 @@ def render_js(spec):
         f"export const FRAME_BYTES = {frame_bytes};",
         f"export const FRAME_MILLIS = {duration_ms};",
         f"export const DEFAULT_PORT = {spec['transport']['defaultPort']};",
+        f"export const EXTENSION_ORIGIN = '{spec['transport']['extensionOrigin']}';",
         "",
         "// Byte offsets within the frame header.",
         "export const OFFSET = Object.freeze({",
