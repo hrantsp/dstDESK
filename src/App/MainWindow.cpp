@@ -54,9 +54,11 @@ MainWindow::MainWindow(IO::WsServer& server, const Settings& settings, bool tran
   connect(&server_, &IO::WsServer::notice, this, [this](const QString& text)
   {
     // Kept, not just flashed: a refusal happens before anyone is looking at the window,
-    // and the placeholder is where they look afterwards.
+    // and the placeholder is where they look afterwards. The status line gets the first
+    // sentence only — it is one line, and the placeholder carries the whole of it.
     notice_ = text;
-    setStatus(text, QStringLiteral("#c0392b"));
+    const auto stop = text.indexOf(QStringLiteral(" — "));
+    setStatus(stop > 0 ? text.left(stop) : text, QStringLiteral("#c0392b"));
     applyPlaceholder(false);
   });
 
@@ -196,7 +198,15 @@ QString MainWindow::waitingText() const
 
 void MainWindow::setStatus(const QString& text, const QString& colour)
 {
-  status_->setText(text);
+  // Elided, because a QLabel's size hint is the whole of its text and nothing in a
+  // horizontal bar constrains it: one long status — a refused origin naming a flag, or a
+  // notice carrying an engine's error string — otherwise widens the window to fit the
+  // line, and the user has to drag it back. The full text stays in the tooltip, and for
+  // notices it is in the placeholder too, which does wrap.
+  constexpr auto kStatusWidth = 520;
+  const auto elided = status_->fontMetrics().elidedText(text, Qt::ElideRight, kStatusWidth);
+  status_->setText(elided);
+  status_->setToolTip(elided == text ? QString() : text);
   dot_->setStyleSheet(QStringLiteral("color:%1; font-size:15px;").arg(colour));
 }
 
