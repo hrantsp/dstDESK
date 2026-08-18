@@ -31,10 +31,12 @@ private:
   void     openSettings();
   void     setStatus(const QString& text, const QString& colour);
   void     applyPlaceholder(bool connected);
+  QString  waitingText() const;
 
   IO::WsServer&   server_;
   Settings        settings_;
   TranscriptView* transcript_ = nullptr;
+  QString         notice_;
 
   QLabel*    dot_     = nullptr;
   QLabel*    status_  = nullptr;

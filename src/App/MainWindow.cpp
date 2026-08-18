@@ -51,6 +51,15 @@ MainWindow::MainWindow(IO::WsServer& server, const Settings& settings, bool tran
     applyPlaceholder(true);
   });
 
+  connect(&server_, &IO::WsServer::notice, this, [this](const QString& text)
+  {
+    // Kept, not just flashed: a refusal happens before anyone is looking at the window,
+    // and the placeholder is where they look afterwards.
+    notice_ = text;
+    setStatus(text, QStringLiteral("#c0392b"));
+    applyPlaceholder(false);
+  });
+
   connect(&server_, &IO::WsServer::sessionEnded, this, [this]
   {
     // Deliberately leaves the transcript on screen: a session ending is exactly when
@@ -67,7 +76,7 @@ QWidget* MainWindow::buildStatusBar(bool transcribing, const QString& keyHint)
   dot_ = new QLabel(QStringLiteral("●"));
   dot_->setStyleSheet(QStringLiteral("color:#b0b0b0; font-size:15px;"));
 
-  status_ = new QLabel(tr("Waiting for a connection"));
+  status_ = new QLabel(tr("Listening on port %1").arg(server_.port()));
   status_->setStyleSheet(QStringLiteral("font-weight:600;"));
 
   // Whether transcription is on stays visible for the whole session. It used to be
@@ -167,13 +176,22 @@ void MainWindow::applyPlaceholder(bool connected)
   if (transcribing_)
   {
     transcript_->setPlaceholder(connected ? tr("Connected. Nothing has been said yet.")
-                                          : tr("Waiting for the extension to connect…"));
+                                          : waitingText());
     return;
   }
 
   transcript_->setPlaceholder(
       connected ? tr("Connected, and recording audio — but not transcribing.\n\n%1").arg(keyHint_)
-                : tr("Waiting for the extension to connect…\n\n%1").arg(keyHint_));
+                : tr("%1\n\n%2").arg(waitingText(), keyHint_));
+}
+
+QString MainWindow::waitingText() const
+{
+  // Names the port, because the commonest reason nothing connects is that the two halves
+  // are looking at different ones — and the number is otherwise only in a console line
+  // that a double-clicked application never shows.
+  const auto waiting = tr("Waiting for Verbal on port %1…").arg(server_.port());
+  return notice_.isEmpty() ? waiting : tr("%1\n\n%2").arg(notice_, waiting);
 }
 
 void MainWindow::setStatus(const QString& text, const QString& colour)

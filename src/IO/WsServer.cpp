@@ -50,7 +50,18 @@ WsServer::WsServer(ServerConfig cfg, QObject* parent)
     }
 
     const bool allowed = cfg_.allowedOrigins.contains(auth->origin());
-    if (!allowed) qWarning("Refused upgrade from origin '%s'", qUtf8Printable(auth->origin()));
+    if (!allowed)
+    {
+      qWarning("Refused upgrade from origin '%s'", qUtf8Printable(auth->origin()));
+
+      // A double-clicked application has no console, so this is the only place it can
+      // say anything. Without it the window reads "waiting for the extension" while the
+      // server is busy refusing that very extension — the most misleading state it can
+      // be in, and one that looks like a network fault from either end.
+      emit notice(tr("Refused a connection from %1 — that is not the configured origin. "
+                     "If it is your extension, restart with:  --origin %1")
+                      .arg(auth->origin()));
+    }
 
     auth->setAllowed(allowed);
   });

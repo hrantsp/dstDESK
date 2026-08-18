@@ -254,6 +254,12 @@ int main(int argc, char** argv)
   {
     // The console path consumes the same signals the window does, so there is one
     // pipeline rather than two that can drift apart.
+    // Notices are the application explaining itself — a refused origin, a stopped
+    // transcription. The window shows them; without this the headless path, which is
+    // where anyone debugging a connection actually looks, drops them silently.
+    QObject::connect(&server, &DST::DESK::IO::WsServer::notice,
+                     [](const QString& text) { qWarning("%s", qUtf8Printable(text)); });
+
     QObject::connect(&server, &DST::DESK::IO::WsServer::utteranceCommitted,
                      [](const DST::DESK::Core::Utterance& utterance)
     {
