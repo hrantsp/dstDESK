@@ -1,4 +1,9 @@
-// The icon Windows Explorer shows for the executable itself. This is separate from the
-// window icon: the Qt resource above is read once the application is running, while a
-// file browser only ever looks at the binary's own resource section.
-IDI_ICON1 ICON "kobayashi.ico"
+// The icon Windows Explorer shows for the executable itself. Separate from the Qt
+// resource beside it: that one is read once the application is running, while a file
+// browser only ever looks at the binary's own resource section.
+//
+// A numeric id, not the IDI_ICON1 seen in most examples. That symbol comes from
+// windows.h, which is not included here, so it would be recorded as a *named* resource
+// — and Explorer shows the icon with the lowest numeric id, ignoring named ones. The
+// result is a binary that carries a perfectly good icon and still shows the default.
+1 ICON "kobayashi.ico"

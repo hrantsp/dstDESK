@@ -94,6 +94,12 @@ add_executable(kobayashi
     src/IO/SttClient.cpp)
 
 if(WIN32)
+    # Declared here rather than in project(), which lists CXX only: RC is a Windows
+    # language, and naming it unconditionally would have CMake hunt for a resource
+    # compiler on platforms that have none. Without it a .rc listed as a source is
+    # quietly ignored, and the executable ends up with the default icon while every
+    # file involved looks correct.
+    enable_language(RC)
     target_sources(kobayashi PRIVATE rec/icons/kobayashi.rc)
 endif()
 
