@@ -15,10 +15,10 @@ This guide applies to the whole repository.
   WAV writing, gap padding. **Contains no Qt.**
 - `src/IO/` — Qt-facing network code. Currently the WebSocket server; the
   transcription client belongs here too.
-- `src/Sim/` — `dstsim`, a stand-in for the browser extension. A client of the
+- `src/Sim/` — `kobayashi-sim`, a stand-in for the browser extension. A client of the
   protocol, not a feature of the application.
-- `src/App/` — `dstdesk`: command line, self-test, wiring.
-- `tst/` — unit tests. They link `dstdesk_core` and Catch2 only, so they run with no
+- `src/App/` — `kobayashi`: command line, self-test, wiring.
+- `tst/` — unit tests. They link `kobayashi_core` and Catch2 only, so they run with no
   event loop, no display, and no Qt libraries present.
 - `rec/` — the protocol source of truth, its generator, both specifications, and the
   Conan recipe for Qt.
@@ -54,11 +54,11 @@ ctest --preset conan-release
 End to end, without a browser:
 
 ```bash
-./bin/Release/dstdesk --output out     # terminal 1
-./bin/Release/dstsim --seconds 3 --gap # terminal 2
+./bin/Release/kobayashi --output out     # terminal 1
+./bin/Release/kobayashi-sim --seconds 3 --gap # terminal 2
 ```
 
-`dstsim` sends 440 Hz on the microphone stream and 660 Hz on the meeting stream, so
+`kobayashi-sim` sends 440 Hz on the microphone stream and 660 Hz on the meeting stream, so
 the result is checkable by ear: one clean tone per file means capture and routing are
 correct.
 
@@ -150,13 +150,13 @@ Before claiming a change works, state:
 - changed files and owning area
 - exact build and test commands, and whether the tree was clean
 - whether both Release and Debug were built
-- whether the end-to-end `dstdesk` + `dstsim` run was performed, and what the session
+- whether the end-to-end `kobayashi` + `kobayashi-sim` run was performed, and what the session
   summary reported for frames, gaps and padded samples
 - anything not verified, and why
 
 Cross-platform status is honest rather than assumed: the code is portable by
 construction but has only ever been compiled and run on Linux. Windows and macOS
-remain unverified, with OpenSSL availability the known risk — `dstdesk --selftest`
+remain unverified, with OpenSSL availability the known risk — `kobayashi --selftest`
 answers it in one run on each machine.
 
 ## Records And Generated Files

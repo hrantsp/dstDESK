@@ -7,13 +7,13 @@
 int main(int argc, char** argv)
 {
   auto app = QCoreApplication(argc, argv);
-  QCoreApplication::setApplicationName   (QStringLiteral("dstsim"));
-  QCoreApplication::setApplicationVersion(QStringLiteral(DSTDESK_VERSION));
+  QCoreApplication::setApplicationName   (QStringLiteral("kobayashi-sim"));
+  QCoreApplication::setApplicationVersion(QStringLiteral(KOBAYASHI_VERSION));
 
   auto parser = QCommandLineParser{};
   parser.setApplicationDescription(
       QStringLiteral("Stands in for the dstORCH browser extension: connects to a "
-                     "running dstdesk, speaks the real protocol, and sends generated "
+                     "running kobayashi, speaks the real protocol, and sends generated "
                      "tones on both streams.\n\n"
                      "The microphone stream carries 440 Hz and the meeting stream "
                      "660 Hz, so the recordings can be checked by ear — one clean "
@@ -22,7 +22,7 @@ int main(int argc, char** argv)
   parser.addVersionOption();
 
   const auto portOption = QCommandLineOption(
-      QStringLiteral("port"), QStringLiteral("Port dstdesk is listening on."),
+      QStringLiteral("port"), QStringLiteral("Port kobayashi is listening on."),
       QStringLiteral("port"), QString::number(DST::DESK::Core::kDefaultPort));
 
   const auto tokenOption = QCommandLineOption(

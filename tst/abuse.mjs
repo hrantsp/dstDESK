@@ -1,11 +1,11 @@
-// Drives a running dstdesk with clients that break the protocol on purpose.
+// Drives a running kobayashi with clients that break the protocol on purpose.
 //
 // The parsing rules are unit-tested against buffers in TestFrame.cpp, but that proves
 // only that the parser rejects them — not that the server closes the connection, sends
 // a diagnosable error, keeps its other state intact, and survives to serve the next
 // client. Those are properties of the whole program, and only a real socket shows them.
 //
-//   dstDESK/bin/Release/dstdesk --headless --port 8899 --output /tmp/abuse
+//   dstDESK/bin/Release/kobayashi --headless --port 8899 --output /tmp/abuse
 //   node dstDESK/tst/abuse.mjs --port 8899
 //
 // Exits non-zero if any case behaves other than specified in rec/PROTOCOL.md.

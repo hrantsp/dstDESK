@@ -227,7 +227,7 @@ private:
     hello[QStringLiteral("protocol")]     = int(Core::kVersion);
     hello[QStringLiteral("sampleRate")]   = int(Core::kSampleRate);
     hello[QStringLiteral("frameSamples")] = int(Core::kFrameSamples);
-    hello[QStringLiteral("client")]       = QStringLiteral("dstdesk --simulate");
+    hello[QStringLiteral("client")]       = QStringLiteral("kobayashi --simulate");
     hello[QStringLiteral("contextEpochUtcMs")] = double(QDateTime::currentMSecsSinceEpoch());
     if (!cfg_.token.isEmpty()) hello[QStringLiteral("token")] = cfg_.token;
 
@@ -348,7 +348,7 @@ private:
   QString unreachable() const
   {
     return QStringLiteral("Could not reach ws://127.0.0.1:%1 — %2\n"
-                          "Is dstdesk running? Start it in another terminal first.")
+                          "Is kobayashi running? Start it in another terminal first.")
         .arg(cfg_.port)
         .arg(socket_.errorString());
   }

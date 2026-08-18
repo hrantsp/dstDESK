@@ -1,4 +1,4 @@
-// Runtime environment checks, exposed as `dstdesk --selftest`.
+// Runtime environment checks, exposed as `kobayashi --selftest`.
 //
 // Not a unit test: this ships inside the application and runs before it serves. A
 // successful compile proves the headers matched, and says nothing about what will

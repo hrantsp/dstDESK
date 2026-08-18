@@ -17,7 +17,7 @@ MainWindow::MainWindow(IO::WsServer& server, const Settings& settings, bool tran
   , transcribing_(transcribing)
   , keyHint_(keyHint)
 {
-  setWindowTitle(tr("dstDESK"));
+  setWindowTitle(tr("Kobayashi"));
   resize(820, 600);
 
   transcript_ = new TranscriptView;
@@ -47,7 +47,7 @@ MainWindow::MainWindow(IO::WsServer& server, const Settings& settings, bool tran
   {
     transcript_->clear();
     setStatus(tr("Capturing — %1").arg(client), QStringLiteral("#c0392b"));
-    setWindowTitle(tr("dstDESK — %1").arg(directory));
+    setWindowTitle(tr("Kobayashi — %1").arg(directory));
     applyPlaceholder(true);
   });
 

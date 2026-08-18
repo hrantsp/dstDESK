@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(DSTDESK_BUILD_TESTS "Build the unit tests" ON)
+option(KOBAYASHI_BUILD_TESTS "Build the unit tests" ON)
 
 # ── Generated protocol constants ─────────────────────────────────────────────
 # dstDESK/rec/protocol.json is the single source of truth for both halves of
@@ -58,20 +58,20 @@ add_custom_command(
 add_custom_target(dst_protocol_generated ALL DEPENDS ${DST_PROTOCOL_STAMP})
 
 # ── Core: no Qt, so it can be tested without an event loop or a display ──────
-add_library(dstdesk_core STATIC
+add_library(kobayashi_core STATIC
     src/Core/Frame.cpp
     src/Core/WavWriter.cpp)
 
-add_dependencies(dstdesk_core dst_protocol_generated)
+add_dependencies(kobayashi_core dst_protocol_generated)
 
-target_include_directories(dstdesk_core PUBLIC
+target_include_directories(kobayashi_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Core)
 
 if(MSVC)
-    target_compile_options(dstdesk_core PRIVATE /W4)
+    target_compile_options(kobayashi_core PRIVATE /W4)
 else()
-    target_compile_options(dstdesk_core PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(kobayashi_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # ── Application ──────────────────────────────────────────────────────────────
@@ -81,7 +81,10 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network WebSockets)
 
 set(CMAKE_AUTOMOC ON)
 
-add_executable(dstdesk
+set(CMAKE_AUTORCC ON)
+
+add_executable(kobayashi
+    res/kobayashi.qrc
     src/App/main.cpp
     src/App/SelfTest.cpp
     src/App/MainWindow.cpp
@@ -90,14 +93,18 @@ add_executable(dstdesk
     src/IO/WsServer.cpp
     src/IO/SttClient.cpp)
 
-target_include_directories(dstdesk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
+if(WIN32)
+    target_sources(kobayashi PRIVATE res/kobayashi.rc)
+endif()
+
+target_include_directories(kobayashi PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/App)
 
 # The version is stated once, by project() above. Repeating it in source is how a
 # release ends up disagreeing with the tag that names it.
-target_compile_definitions(dstdesk PRIVATE DSTDESK_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(kobayashi PRIVATE KOBAYASHI_VERSION="${PROJECT_VERSION}")
 
-target_link_libraries(dstdesk PRIVATE
-    dstdesk_core
+target_link_libraries(kobayashi PRIVATE
+    kobayashi_core
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -105,9 +112,9 @@ target_link_libraries(dstdesk PRIVATE
     Qt6::WebSockets)
 
 if(MSVC)
-    target_compile_options(dstdesk PRIVATE /W4)
+    target_compile_options(kobayashi PRIVATE /W4)
 else()
-    target_compile_options(dstdesk PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(kobayashi PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # A windowed application on each platform's own terms.
@@ -118,14 +125,23 @@ endif()
 # double-click at all, and the DragNDrop package would carry a bare binary rather than
 # something a reviewer can drag into Applications.
 #
-# dstsim is deliberately left alone: it is a console tool, and its output is the point.
-set_target_properties(dstdesk PROPERTIES
+# kobayashi-sim is deliberately left alone: it is a console tool, and its output is the point.
+set_target_properties(kobayashi PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE    TRUE
-    MACOSX_BUNDLE_BUNDLE_NAME      "dstDESK"
+    MACOSX_BUNDLE_BUNDLE_NAME      "Kobayashi"
     MACOSX_BUNDLE_BUNDLE_VERSION   "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
-    MACOSX_BUNDLE_GUI_IDENTIFIER   "com.hrantsp.dstdesk")
+    MACOSX_BUNDLE_GUI_IDENTIFIER   "com.hrantsp.kobayashi"
+    MACOSX_BUNDLE_ICON_FILE        "kobayashi.icns")
+
+# A bundle reads its icon from Contents/Resources by the name in the plist above, so the
+# file has to be placed there as part of the target rather than installed alongside it.
+if(APPLE)
+    set_source_files_properties(res/kobayashi.icns PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources")
+    target_sources(kobayashi PRIVATE res/kobayashi.icns)
+endif()
 
 # Where Qt's runtime lives, recorded beside the executable at configure time.
 #
@@ -141,7 +157,7 @@ set_target_properties(dstdesk PROPERTIES
 # fallback for the deployment below: if windeployqt is missing, this is what still
 # lets `dst.py run` start the application.
 file(GENERATE
-     OUTPUT "$<TARGET_FILE_DIR:dstdesk>/qt-runtime-dir.txt"
+     OUTPUT "$<TARGET_FILE_DIR:kobayashi>/qt-runtime-dir.txt"
      CONTENT "$<TARGET_FILE_DIR:Qt6::Core>")
 
 # Windows: make the built executable start on its own, not only through dst.py.
@@ -154,13 +170,13 @@ file(GENERATE
 # it is further from the cause. windeployqt gets both halves right, and it is the same
 # tool the install-time deployment further down dispatches to.
 if(WIN32)
-    find_program(DSTDESK_WINDEPLOYQT windeployqt
+    find_program(KOBAYASHI_WINDEPLOYQT windeployqt
                  HINTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}")
-    if(DSTDESK_WINDEPLOYQT)
-        add_custom_command(TARGET dstdesk POST_BUILD
-            COMMAND "${DSTDESK_WINDEPLOYQT}" --no-translations --no-compiler-runtime
-                    "$<TARGET_FILE:dstdesk>"
-            COMMENT "Copying the Qt runtime beside dstdesk.exe"
+    if(KOBAYASHI_WINDEPLOYQT)
+        add_custom_command(TARGET kobayashi POST_BUILD
+            COMMAND "${KOBAYASHI_WINDEPLOYQT}" --no-translations --no-compiler-runtime
+                    "$<TARGET_FILE:kobayashi>"
+            COMMENT "Copying the Qt runtime beside kobayashi.exe"
             VERBATIM)
     else()
         message(WARNING
@@ -171,41 +187,41 @@ if(WIN32)
 endif()
 
 # ── Simulator ────────────────────────────────────────────────────────────────
-# A separate executable, not a mode of dstdesk. It is a client of the protocol —
+# A separate executable, not a mode of kobayashi. It is a client of the protocol —
 # its real counterpart is a browser — and keeping it apart stops the server's
 # command line carrying options that only apply when it is not a server.
-add_executable(dstsim
+add_executable(kobayashi-sim
     src/Sim/main.cpp
     src/Sim/Simulate.cpp)
 
-target_include_directories(dstsim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/Sim)
-target_compile_definitions(dstsim PRIVATE DSTDESK_VERSION="${PROJECT_VERSION}")
+target_include_directories(kobayashi-sim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/Sim)
+target_compile_definitions(kobayashi-sim PRIVATE KOBAYASHI_VERSION="${PROJECT_VERSION}")
 
-target_link_libraries(dstsim PRIVATE
-    dstdesk_core
+target_link_libraries(kobayashi-sim PRIVATE
+    kobayashi_core
     Qt6::Core
     Qt6::Network
     Qt6::WebSockets)
 
 if(MSVC)
-    target_compile_options(dstsim PRIVATE /W4)
+    target_compile_options(kobayashi-sim PRIVATE /W4)
 else()
-    target_compile_options(dstsim PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(kobayashi-sim PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────
-if(DSTDESK_BUILD_TESTS)
+if(KOBAYASHI_BUILD_TESTS)
     find_package(Catch2 3 REQUIRED)
     enable_testing()
 
-    add_executable(dstdesk_tests
+    add_executable(kobayashi_tests
         tst/TestFrame.cpp
         tst/TestRecorder.cpp
         tst/TestTranscript.cpp)
-    target_link_libraries(dstdesk_tests PRIVATE dstdesk_core Catch2::Catch2WithMain)
+    target_link_libraries(kobayashi_tests PRIVATE kobayashi_core Catch2::Catch2WithMain)
 
     include(Catch)
-    catch_discover_tests(dstdesk_tests)
+    catch_discover_tests(kobayashi_tests)
 endif()
 
 # ── Packaging ────────────────────────────────────────────────────────────────
@@ -218,18 +234,18 @@ include(GNUInstallDirs)
 # contains every library it needs and still refuses to start anywhere but the machine
 # that built it — which is the failure "packaged" is supposed to rule out.
 if(APPLE)
-    set(DSTDESK_INSTALL_RPATH "@executable_path/../lib")
+    set(KOBAYASHI_INSTALL_RPATH "@executable_path/../lib")
 elseif(UNIX)
-    set(DSTDESK_INSTALL_RPATH "$ORIGIN/../lib")
+    set(KOBAYASHI_INSTALL_RPATH "$ORIGIN/../lib")
 endif()
 
-if(DEFINED DSTDESK_INSTALL_RPATH)
-    set_target_properties(dstdesk dstsim PROPERTIES
-        INSTALL_RPATH "${DSTDESK_INSTALL_RPATH}"
+if(DEFINED KOBAYASHI_INSTALL_RPATH)
+    set_target_properties(kobayashi kobayashi-sim PROPERTIES
+        INSTALL_RPATH "${KOBAYASHI_INSTALL_RPATH}"
         BUILD_WITH_INSTALL_RPATH FALSE)
 endif()
 
-install(TARGETS dstdesk dstsim
+install(TARGETS kobayashi kobayashi-sim
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         BUNDLE  DESTINATION .)
 
@@ -239,19 +255,19 @@ install(TARGETS dstdesk dstsim
 # Linux support is partial, hence NO_UNSUPPORTED_PLATFORM_ERROR rather than a hard
 # failure on the platform this is developed on.
 qt_generate_deploy_app_script(
-    TARGET dstdesk
-    OUTPUT_SCRIPT DSTDESK_DEPLOY_SCRIPT
+    TARGET kobayashi
+    OUTPUT_SCRIPT KOBAYASHI_DEPLOY_SCRIPT
     NO_UNSUPPORTED_PLATFORM_ERROR)
-install(SCRIPT ${DSTDESK_DEPLOY_SCRIPT})
+install(SCRIPT ${KOBAYASHI_DEPLOY_SCRIPT})
 
 # Plugins are loaded by name at runtime, so they appear in no link line and the
 # deployment script does not collect them on every platform. Two groups matter:
 # without `platforms` the application cannot open a window at all, and without `tls`
 # every secure connection fails — a failure that surfaces on the first transcription
 # request rather than at startup.
-foreach(DSTDESK_PLUGIN_GROUP IN ITEMS platforms tls)
-    if(EXISTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/${DSTDESK_PLUGIN_GROUP}")
-        install(DIRECTORY "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/${DSTDESK_PLUGIN_GROUP}"
+foreach(KOBAYASHI_PLUGIN_GROUP IN ITEMS platforms tls)
+    if(EXISTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/${KOBAYASHI_PLUGIN_GROUP}")
+        install(DIRECTORY "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/${KOBAYASHI_PLUGIN_GROUP}"
                 DESTINATION plugins
                 FILES_MATCHING PATTERN "*${CMAKE_SHARED_LIBRARY_SUFFIX}*")
     endif()
@@ -280,27 +296,27 @@ if(NOT WIN32)
     # directory CMakeDeps reports. Only shared builds need shipping — a static OpenSSL
     # is already inside whatever linked it, and nothing here links it at all.
     if(DEFINED openssl_LIB_DIRS_RELEASE)
-        file(GLOB DSTDESK_OPENSSL_RUNTIME
+        file(GLOB KOBAYASHI_OPENSSL_RUNTIME
              "${openssl_LIB_DIRS_RELEASE}/libssl${CMAKE_SHARED_LIBRARY_SUFFIX}*"
              "${openssl_LIB_DIRS_RELEASE}/libcrypto${CMAKE_SHARED_LIBRARY_SUFFIX}*")
-        if(DSTDESK_OPENSSL_RUNTIME)
-            install(FILES ${DSTDESK_OPENSSL_RUNTIME} DESTINATION lib)
+        if(KOBAYASHI_OPENSSL_RUNTIME)
+            install(FILES ${KOBAYASHI_OPENSSL_RUNTIME} DESTINATION lib)
         else()
             message(STATUS
                 "OpenSSL resolved to a static build, so nothing is shipped for it. The "
                 "packaged application will use whatever OpenSSL the target machine has, "
-                "and dstdesk --selftest reports whether that works.")
+                "and kobayashi --selftest reports whether that works.")
         endif()
     endif()
 endif()
 
-set(CPACK_PACKAGE_NAME "dstDESK")
+set(CPACK_PACKAGE_NAME "Kobayashi")
 set(CPACK_PACKAGE_VENDOR "hrantsp")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Dual-stream meeting transcription")
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "dstDESK")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Kobayashi")
 set(CPACK_PACKAGE_FILE_NAME
-    "dstDESK-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+    "Kobayashi-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_VERBATIM_VARIABLES ON)
 
 include(CPack)

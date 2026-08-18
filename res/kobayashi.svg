@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Two speakers, kept apart and in order: the mic stream in #2f6f4e and the meeting
+       stream in #3a5a8c, the same two colours the transcript uses. Rendered from this
+       file into every other format the platforms want. -->
+  <rect width="256" height="256" rx="56" fill="#2b3442"/>
+  <rect x="48"  y="70"  width="118" height="26" rx="13" fill="#2f6f4e"/>
+  <rect x="90"  y="115" width="118" height="26" rx="13" fill="#3a5a8c"/>
+  <rect x="48"  y="160" width="82"  height="26" rx="13" fill="#2f6f4e"/>
+</svg>

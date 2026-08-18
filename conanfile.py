@@ -3,7 +3,7 @@ from conan.tools.cmake import CMakeToolchain, CMakeDeps, cmake_layout
 
 
 class DstDeskConan(ConanFile):
-    name = "dstdesk"
+    name = "kobayashi"
     settings = "os", "compiler", "build_type", "arch"
 
     def requirements(self):

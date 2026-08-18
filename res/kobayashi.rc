@@ -1,0 +1,4 @@
+// The icon Windows Explorer shows for the executable itself. This is separate from the
+// window icon: the Qt resource above is read once the application is running, while a
+// file browser only ever looks at the binary's own resource section.
+IDI_ICON1 ICON "kobayashi.ico"

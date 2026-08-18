@@ -1,4 +1,4 @@
-// A synthetic dstORCH, exposed as `dstdesk --simulate`.
+// A synthetic dstORCH, exposed as `kobayashi --simulate`.
 //
 // Speaks the real protocol over a real socket and sends generated tones, so the whole
 // desktop half can be exercised end to end before the browser extension exists — and

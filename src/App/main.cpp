@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QTextStream>
 #include <QApplication>
+#include <QIcon>
 #include <QProcessEnvironment>
 #include <QSettings>
 #include <QStandardPaths>
@@ -93,8 +94,24 @@ int main(int argc, char** argv)
   auto app = headless
       ? std::unique_ptr<QCoreApplication>(new QCoreApplication(argc, argv))
       : std::unique_ptr<QCoreApplication>(new QApplication(argc, argv));
-  QCoreApplication::setApplicationName   (QStringLiteral("dstdesk"));
-  QCoreApplication::setApplicationVersion(QStringLiteral(DSTDESK_VERSION));
+  QCoreApplication::setApplicationName   (QStringLiteral("kobayashi"));
+
+  // Several sizes from one QIcon, so the window manager takes what it wants rather
+  // than scaling a single bitmap badly. Set on the application, not the window: dialogs
+  // inherit it, and the taskbar entry exists before any window does.
+  //
+  // Only when there is a GUI application to set it on. --selftest and --headless build a
+  // QCoreApplication, and this static reaches for a QApplication that is not there — it
+  // segfaults rather than failing politely, and it does so in the two modes that run on
+  // machines with no display at all.
+  if (!headless)
+  {
+    auto icon = QIcon{};
+    for (const auto size : { 16, 32, 48, 64, 128, 256 })
+      icon.addFile(QStringLiteral(":/kobayashi-%1.png").arg(size));
+    QApplication::setWindowIcon(icon);
+  }
+  QCoreApplication::setApplicationVersion(QStringLiteral(KOBAYASHI_VERSION));
 
   // Stored settings are the defaults, so a double-clicked launch behaves like the
   // last configured one. An explicitly typed flag still overrides them.

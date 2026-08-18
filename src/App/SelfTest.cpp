@@ -39,7 +39,7 @@ CheckResult checkWebSockets()
 {
   // Proves the WebSockets module loaded and that a server can actually bind,
   // rather than merely that the header was present at compile time.
-  auto probe = QWebSocketServer(QStringLiteral("dstdesk-selftest"),
+  auto probe = QWebSocketServer(QStringLiteral("kobayashi-selftest"),
                                 QWebSocketServer::NonSecureMode);
 
   if (!probe.listen(QHostAddress::LocalHost, 0))
@@ -108,7 +108,7 @@ CheckResult checkOutputDir(const QString& dir)
                 QStringLiteral("Choose a writable location with --output."));
   }
 
-  const QString probePath = dd.filePath(QStringLiteral(".dstdesk-write-test"));
+  const QString probePath = dd.filePath(QStringLiteral(".kobayashi-write-test"));
   auto probe = QFile(probePath);
 
   if (!probe.open(QIODevice::WriteOnly))

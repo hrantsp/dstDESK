@@ -1,0 +1,15 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <!-- Compiled into the binary rather than installed beside it: a window icon that
+         depends on a file on disk is one deployment mistake away from disappearing,
+         and it would disappear only on the machines nobody tests on. Several sizes,
+         because Qt picks per use — the title bar, the task switcher and the taskbar
+         all ask for different ones. -->
+    <file>kobayashi-16.png</file>
+    <file>kobayashi-32.png</file>
+    <file>kobayashi-48.png</file>
+    <file>kobayashi-64.png</file>
+    <file>kobayashi-128.png</file>
+    <file>kobayashi-256.png</file>
+</qresource>
+</RCC>

@@ -52,7 +52,7 @@ struct Settings
   static QString path()
   {
     const auto dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    return QDir(dir).filePath(QStringLiteral("dstdesk.ini"));
+    return QDir(dir).filePath(QStringLiteral("kobayashi.ini"));
   }
 
   /// True when the key came from the environment, which the dialog must not overwrite
