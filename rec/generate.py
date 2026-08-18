@@ -177,6 +177,17 @@ def render_js(spec):
 
     out = [
         f"// {BANNER}",
+        "//",
+        "// This file is committed, and it is the one generated artifact that is. A Chrome",
+        "// extension has no build step, so a reviewer who clones this repository and loads",
+        "// it unpacked — which is exactly what the task asks for — would otherwise get an",
+        "// extension that fails on an import for a file no step of theirs was going to",
+        "// produce. It is committed for that reason and no other.",
+        "//",
+        "// It should not be. A generated file in version control is a second copy of the",
+        "// truth that can drift from protocol.json, and the only thing preventing that",
+        "// here is `generate.py --check` running in dstDESK's build. Given a build step on",
+        "// this side, or a published package, this file would come out of git again.",
         "",
         f"export const VERSION = {spec['protocolVersion']};",
         f"export const SAMPLE_RATE = {audio['sampleRate']};",

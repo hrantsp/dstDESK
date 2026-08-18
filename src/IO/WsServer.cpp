@@ -254,7 +254,11 @@ void WsServer::handleStreamOpen(const QJsonObject& msg)
   // than UTF-8 — so a path with non-ASCII characters would silently resolve wrong
   // there while working perfectly on Linux and macOS. UTF-16 converts correctly on
   // both.
-  if (!session_->recorders[slot].open(path.toStdU16String(), Core::kSampleRate))
+  if (!cfg_.record)
+  {
+    session_->recorders[slot].openCounting(Core::kSampleRate);
+  }
+  else if (!session_->recorders[slot].open(path.toStdU16String(), Core::kSampleRate))
   {
     qWarning("Cannot open %s for writing", qUtf8Printable(path));
     return;
@@ -262,7 +266,8 @@ void WsServer::handleStreamOpen(const QJsonObject& msg)
 
   session_->opened[slot] = true;
   session_->transcript.openStream(stream);
-  qInfo("Stream %s open -> %s", Core::Stream::label(stream), qUtf8Printable(path));
+  qInfo("Stream %s open -> %s", Core::Stream::label(stream),
+        cfg_.record ? qUtf8Printable(path) : "not recorded");
   emit streamOpened(stream);
 }
 

@@ -45,13 +45,29 @@ public:
     return wav_.open(path, sampleRate, 1);
   }
 
-  bool isOpen() const { return wav_.isOpen(); }
-  void close()        {        wav_.close (); }
+  // Accounting without a file, for a session the user asked not to record.
+  //
+  // Frame counting is not a side effect of writing audio; it is what shows the pipeline
+  // is intact — gaps, rejects and duration are how a dropped or reordered frame becomes
+  // visible at all. Turning recording off should stop audio reaching the disk, not stop
+  // the application knowing what it received.
+  bool openCounting(std::uint32_t sampleRate)
+  {
+    sampleRate_   = sampleRate;
+    stats_        = Stats{};
+    nextExpected_ = 0;
+    sinceFlush_   = 0;
+    counting_     = true;
+    return true;
+  }
+
+  bool isOpen() const { return wav_.isOpen() || counting_; }
+  void close()        { counting_ = false; wav_.close(); }
 
   // Returns false if the frame was rejected as out of order, per PROTOCOL.md §5.3.
   bool accept(const FrameHeader& header, std::span<const std::int16_t> samples)
   {
-    if (!wav_.isOpen()) return false;
+    if (!wav_.isOpen() && !counting_) return false;
 
     if (!stats_.started)
     {
@@ -72,12 +88,12 @@ public:
     if (header.sampleIndex > nextExpected_)
     {
       const std::uint32_t missing = header.sampleIndex - nextExpected_;
-      wav_.writeSilence(missing);
+      if (wav_.isOpen()) wav_.writeSilence(missing);
       stats_.paddedSamples += missing;
       ++stats_.gaps;
     }
 
-    wav_.write(samples);
+    if (wav_.isOpen()) wav_.write(samples);
     stats_.samples         += samples.size();
     stats_.lastSampleIndex  = header.sampleIndex;
     nextExpected_           = header.sampleIndex + header.frameSamples;
@@ -89,7 +105,7 @@ public:
     if (++sinceFlush_ >= kFlushEveryFrames)
     {
       sinceFlush_ = 0;
-      wav_.flush();
+      if (wav_.isOpen()) wav_.flush();
     }
 
     return true;
@@ -102,7 +118,9 @@ public:
   double durationSeconds() const
   {
     if (sampleRate_ == 0) return 0.0;
-    return static_cast<double>(wav_.samplesWritten()) / sampleRate_;
+    const auto written = wav_.isOpen() ? wav_.samplesWritten()
+                                       : stats_.samples + stats_.paddedSamples;
+    return static_cast<double>(written) / sampleRate_;
   }
 
 private:
@@ -110,6 +128,7 @@ private:
   static constexpr std::uint32_t kFlushEveryFrames = 32;
 
   WavWriter     wav_;
+  bool          counting_     = false;
   std::uint32_t sampleRate_   = 0;
   std::uint32_t nextExpected_ = 0;
   std::uint32_t sinceFlush_   = 0;

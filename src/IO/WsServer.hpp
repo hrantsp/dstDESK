@@ -37,6 +37,12 @@ struct ServerConfig
   QString       token;
   QStringList   allowedOrigins;
 
+  // Recording is not something the task asked for; it began as the evidence that
+  // frames were arriving intact and stayed because it still is. --no-record turns it
+  // off, leaving the frame accounting — gaps, rejects, duration — which is the part
+  // that shows the pipeline working.
+  bool      record = true;
+
   // Transcription follows the key: with one, audio is transcribed as well as
   // recorded; without one, the app still records. --no-transcribe forces it off.
   bool      transcribe = false;

@@ -176,6 +176,11 @@ int main(int argc, char** argv)
       QStringLiteral("token"), QStringLiteral("Shared secret the client must present."),
       QStringLiteral("secret"), stored.token);
 
+  const auto noRecordOption = QCommandLineOption(
+      QStringLiteral("no-record"),
+      QStringLiteral("Transcribe without writing audio to disk. Frame accounting is "
+                     "kept, so the session summary still reports gaps and rejects."));
+
   const auto noTranscribeOption = QCommandLineOption(
       QStringLiteral("no-transcribe"),
       QStringLiteral("Record only, even when DEEPGRAM_API_KEY is set."));
@@ -202,6 +207,7 @@ int main(int argc, char** argv)
   parser.addOption(outputOption);
   parser.addOption(tokenOption);
   parser.addOption(originOption);
+  parser.addOption(noRecordOption);
   parser.addOption(noTranscribeOption);
   parser.addOption(modelOption);
   const auto headlessOption = QCommandLineOption(
@@ -273,6 +279,7 @@ int main(int argc, char** argv)
   // DEEPGRAM_API_KEY gets transcripts, and development without one still records.
   // The key is never a command-line argument, which would put it in shell history
   // and in the process list for every other user on the machine.
+  cfg.record      = !parser.isSet(noRecordOption);
   cfg.stt.apiKey  = stored.apiKey;
   cfg.stt.model   = parser.value(modelOption);
   cfg.stt.diarize = parser.isSet(diarizeOption) || stored.diarize;
