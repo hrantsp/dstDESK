@@ -251,6 +251,20 @@ if(DEFINED KOBAYASHI_INSTALL_RPATH)
         BUILD_WITH_INSTALL_RPATH FALSE)
 endif()
 
+# Desktop integration, which on Linux is the only thing that produces an icon at all:
+# a file manager will not read one out of an ELF binary the way Explorer reads a
+# resource section, so the icon comes from an installed .desktop entry and the icon
+# theme, or it does not exist.
+if(UNIX AND NOT APPLE)
+    install(FILES rec/icons/kobayashi.desktop
+            DESTINATION share/applications)
+    foreach(KOBAYASHI_ICON_SIZE IN ITEMS 16 32 48 64 128 256)
+        install(FILES rec/icons/kobayashi-${KOBAYASHI_ICON_SIZE}.png
+                DESTINATION share/icons/hicolor/${KOBAYASHI_ICON_SIZE}x${KOBAYASHI_ICON_SIZE}/apps
+                RENAME kobayashi.png)
+    endforeach()
+endif()
+
 install(TARGETS kobayashi kobayashi-sim
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         BUNDLE  DESTINATION .)

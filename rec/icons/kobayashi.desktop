@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Kobayashi
+GenericName=Dual-stream transcription
+Comment=Records and transcribes microphone and meeting audio as separate streams
+Exec=kobayashi
+Icon=kobayashi
+Terminal=false
+Categories=AudioVideo;Audio;
+# X11 matches a window to this entry by its class; Wayland matches on the application
+# id, which the application reports through QGuiApplication::setDesktopFileName. Both
+# are named here because a GNOME session may be either.
+StartupWMClass=kobayashi

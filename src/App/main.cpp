@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QTextStream>
 #include <QApplication>
+#include <QGuiApplication>
 #include <QIcon>
 #include <QProcessEnvironment>
 #include <QSettings>
@@ -106,6 +107,12 @@ int main(int argc, char** argv)
   // machines with no display at all.
   if (!headless)
   {
+    // Wayland gives a window no icon of its own: the compositor matches the window to
+    // an installed .desktop entry by application id and takes the icon from there, so
+    // setWindowIcon alone leaves a generic tile in the dock however many sizes it
+    // carries. X11 does use the window icon, so both are set.
+    QGuiApplication::setDesktopFileName(QStringLiteral("kobayashi"));
+
     auto icon = QIcon{};
     for (const auto size : { 16, 32, 48, 64, 128, 256 })
       icon.addFile(QStringLiteral(":/kobayashi-%1.png").arg(size));
