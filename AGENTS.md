@@ -20,12 +20,17 @@ This guide applies to the whole repository.
 - `src/App/` — `kobayashi`: command line, self-test, wiring. The transcript is a
   model, a filter proxy and a delegate; do not reintroduce a widget per utterance,
   and see decision 24 for the measurements that settled it.
-- `tst/` — checks, of three kinds.
+- `tst/` — checks, of four kinds.
   - `TestFrame`, `TestRecorder`, `TestTranscript` link `kobayashi_core` and Catch2 only,
     so they run with no event loop, no display, and no Qt libraries present.
   - `abuse.mjs` drives a real socket against a running server and is the only thing that
     checks the MUSTs in `rec/PROTOCOL.md` §5.3 are implemented. A change to the wire
     contract is not done until this passes.
+  - `sessions.mjs` covers what happens *between* connections — a client displaced by a
+    reconnecting one, and two sessions inside a single wall-clock second. It needs a
+    server started with recording **on** and transcription pointed at `kobayashi-mockstt`,
+    which is why it is a separate check from `abuse.mjs`: the faults it guards cannot
+    happen in the `--no-record --no-transcribe` configuration that one runs in.
   - `BenchTranscript.cpp` guards a property rather than a behaviour: that appending to
     the transcript does not get slower as the transcript grows. See decision 24.
 - `rec/` — the protocol source of truth, its generator, both specifications, and the
@@ -59,9 +64,19 @@ ctest --preset conan-release
 
 `conan-debug` exists alongside `conan-release`. Both must be warning-free.
 
-`python3 dstOMNI/dst.py test` runs all three, plus the browser wire check — it starts a
-server of its own for the two that need one, so none of them depends on someone
-remembering to.
+```bash
+python3 dstOMNI/dst.py build --sanitize   # a second tree in bin/Sanitize
+python3 dstOMNI/dst.py test  --sanitize   # the whole suite against it
+```
+
+AddressSanitizer and UndefinedBehaviorSanitizer, in a build tree of their own so a
+sanitized binary can never be packaged by forgetting to reconfigure. The run fails on any
+report from any process it starts, including the detached ones whose stderr is otherwise
+discarded — see decision 29 for why that needs two mechanisms rather than one. Anything
+touching `Core/`, `IO/` or the receive path is not done until this passes.
+
+`python3 dstOMNI/dst.py test` runs all of them, plus the browser wire check — it starts
+the servers they need, so none of them depends on someone remembering to.
 
 End to end, without a browser:
 
@@ -133,12 +148,30 @@ optional. `sampleIndex` arrives from the client, and padding writes the differen
 frame claiming a position four billion samples ahead used to mean eight gigabytes of
 silence on disk. Past the cap, do not pad, continue from the new position, and say so.
 
+**The cap binds one frame and not one second, and that is a known limit rather than a
+design.** It is applied per call and remembers nothing, so a client asking for a large gap
+on every frame is not bounded by it at all — measured at 53 MB on disk and 1,711 s of
+billable audio from 1.92 s of real audio. Decision 27 has the numbers and the shape of the
+fix; do not close it by lowering the per-gap cap, which would break the genuine drops the
+cap exists to pad.
+
 ### Recordings stay playable
 
 A RIFF header claiming zero bytes makes a file unreadable however much audio sits
 behind it. The sizes are patched roughly once a second while recording, and `SIGINT`
 and `SIGTERM` are handled so destructors run. Both exist because a killed process
 previously left whole sessions unplayable. Do not remove either.
+
+### A fix is not finished until the same fault has been looked for one level up
+
+Decision 28. Three separate fixes in this repository stopped at the edge of the case that
+had been reproduced, and in every one the same fault was sitting one level above it: a
+teardown race fixed synchronously and not asynchronously, a recording overwrite fixed for
+the file and not the directory, a write bound fixed per frame and not per second.
+
+So after the test goes green: name the class of the fault in one sentence, then go and
+look for that class somewhere the reproduction did not reach. Record what the search
+found, including when it found nothing. That search is part of the change, not a follow-up.
 
 ### Core stays framework-free
 
@@ -186,7 +219,8 @@ Before claiming a change works, state:
 
 - changed files and owning area
 - exact build and test commands, and whether the tree was clean
-- whether both Release and Debug were built
+- whether both Release and Debug were built, and whether `test --sanitize` was run
+- what class the fault belonged to, and where else that class was looked for
 - whether the end-to-end `kobayashi` + `kobayashi-sim` run was performed, and what the session
   summary reported for frames, gaps and padded samples
 - anything not verified, and why

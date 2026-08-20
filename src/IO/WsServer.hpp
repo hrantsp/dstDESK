@@ -122,6 +122,12 @@ private:
     // Said once per stream, not once per frame: a full disk fails 31 times a second.
     std::array<bool, 2> reportedWriteFailure = { false, false };
 
+    // Whether any audio has ever arrived on this stream since it opened. A stream that
+    // is open but has never sent a frame cannot be holding audio the transcript is
+    // waiting for, and it gets a much shorter leash than one whose engine has merely
+    // gone quiet — see kSilentStreamMs.
+    std::array<bool, 2> sawFrame = { false, false };
+
     // Created with the stream, but only connected once the first frame arrives: the
     // engine measures time from the first audio it receives, so the offset onto the
     // shared capture clock is not known until then.
@@ -165,12 +171,20 @@ private:
   void startTranscription(Core::Stream::Value stream);
   void forwardToEngine(std::size_t slot, const Core::ParsedFrame& frame);
   void noteAlive(Core::Stream::Value stream);
+  void armStallWatch();
   void checkForStalls();
 
   // Even a stream carrying pure silence is finalised every few seconds, so total quiet
   // for this long is a broken connection rather than a quiet room. Deliberately far
   // above the longest plausible sentence, since a long sentence is not a stall.
   static constexpr qint64 kStallAfterMs = 20000;
+
+  // How long an open stream may go without sending a single frame before it stops
+  // holding the transcript back. A capture that is working sends its first frame within
+  // one 32 ms render quantum of the stream opening, so this is a hundred and fifty times
+  // the honest case — and it is a different question from kStallAfterMs, which asks how
+  // long an engine that *is* being fed audio may stay silent.
+  static constexpr qint64 kSilentStreamMs = 5000;
   void drainTranscript();
   void emitUtterance(const Core::Utterance& utterance);
 
@@ -182,6 +196,11 @@ private:
   void reportStream(std::size_t slot);
 
   bool tokenMatches(const QString& offered) const;
+
+  /// A directory for this session that does not already hold one. The stamp names the
+  /// second capture began in, and two sessions can share a second.
+  QString sessionDirectory() const;
+
   static const char* streamKey(Core::Stream::Value stream);
 
   ServerConfig             cfg_;

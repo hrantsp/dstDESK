@@ -121,6 +121,32 @@ bool WsServer::tokenMatches(const QString& offered) const
   return difference == 0;
 }
 
+QString WsServer::sessionDirectory() const
+{
+  // Named for the second it began in, which is what makes a recording findable — and
+  // which is not unique. Two sessions inside one second share the name, and the second
+  // one's stream-open truncates the first one's mic.wav while the summary still reports
+  // the frames it wrote: a clean session over audio that no longer exists.
+  //
+  // Reachable without trying: the extension's first reconnect delay is 500 ms, so a
+  // socket that blips shortly after capture starts reconnects inside the same second.
+  // Same failure the per-stream `-2` suffix already exists to prevent, one level up.
+  const auto base = QDir(cfg_.outputDir);
+  const auto stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+
+  if (!base.exists(stamp)) return base.filePath(stamp);
+
+  // Bounded rather than while(true): if something else is creating these as fast as we
+  // can test them, failing to record is better than spinning. 1000 sessions in one
+  // second is not a case worth serving.
+  for (int nth = 2; nth < 1000; ++nth)
+  {
+    const auto candidate = QStringLiteral("%1-%2").arg(stamp).arg(nth);
+    if (!base.exists(candidate)) return base.filePath(candidate);
+  }
+  return base.filePath(stamp);
+}
+
 const char* WsServer::streamKey(Core::Stream::Value stream)
 {
   switch (stream) { case Core::Stream::Mic : return "mic";
@@ -144,6 +170,20 @@ void WsServer::onNewConnection()
     // session is recording, and to say so on the socket rather than in a log line.
     qInfo("Replacing the existing session");
     closeSession();
+
+    // closeSession() returns with the session still alive whenever it is waiting for a
+    // transcription connection to finalise, and the replacement is about to overwrite
+    // session_ — which would destroy the Session while its socket, its engine clients
+    // and its stall timer were all still connected to this server. The old socket then
+    // delivered audio into the *new* session's recorder and transcript, and its
+    // eventual `disconnected` tore that session down; the clients and the timer leaked,
+    // because the handler that frees them checks the session id and finds a different
+    // one. Measured at about 14 kB and one live 2 s timer per displacement.
+    //
+    // So a displaced session is retired here and now. It loses whatever the engine had
+    // not yet finalised, which is a few words of a session the user has already
+    // replaced — and the window clears the transcript for the new one in any case.
+    if (session_) finishSession();
   }
 
   session_ = std::make_unique<Session>();
@@ -170,6 +210,12 @@ void WsServer::onTextMessage(const QString& message)
     qWarning("Ignoring unparseable control message: %s", qUtf8Printable(err.errorString()));
     return;
   }
+
+  // Everything that reaches closeSession() is terminal — bye, a disconnect, a
+  // replacement — and the recorders are shut at that moment. Acting on control messages
+  // afterwards means a stream-open during teardown, which creates a recording nothing
+  // will ever close properly and an `opened` flag the summary has already reported on.
+  if (session_->closing) return;
 
   const QJsonObject msg  = doc.object();
   const QString     type = msg.value(QStringLiteral("type")).toString();
@@ -222,12 +268,22 @@ void WsServer::handleHello(const QJsonObject& msg)
     return;
   }
 
+  // A second hello is a client fault — PROTOCOL.md §3 says hello is the first message on
+  // the connection. Acting on it would open a second session directory while the streams
+  // opened under the first went on recording into the old one, so the summary would
+  // describe a session whose files are somewhere else.
+  if (session_->helloDone)
+  {
+    qWarning("Ignoring a second hello on a connection that has already handshaken");
+    return;
+  }
+
   session_->helloDone         = true;
   session_->client            = msg.value(QStringLiteral("client")).toString();
   session_->contextEpochUtcMs = msg.value(QStringLiteral("contextEpochUtcMs")).toDouble();
 
   // One directory per session, so successive runs never overwrite each other.
-  session_->dir = QDir(cfg_.outputDir).filePath(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
+  session_->dir = sessionDirectory();
   QDir().mkpath(session_->dir);
 
   const QString who = session_->client.isEmpty() ? QStringLiteral("(unnamed client)")
@@ -291,7 +347,16 @@ void WsServer::handleStreamOpen(const QJsonObject& msg)
 
   session_->opened[slot]   = true;
   session_->reported[slot] = false;
+  session_->sawFrame[slot] = false;
   session_->transcript.openStream(stream);
+
+  // The watchdog's clock for this stream starts here, not when a transcription
+  // connection is made. An open stream holds the merge watermark down, and a stream that
+  // never sends a frame never gets a connection — so it held it down for the whole call
+  // and nothing was ever committed while the *other* stream was being transcribed
+  // perfectly. Everything then arrived at once in the end-of-session flush.
+  session_->lastResult[slot] = QDateTime::currentDateTimeUtc();
+  armStallWatch();
   qInfo("Stream %s open -> %s", Core::Stream::label(stream),
         cfg_.record ? qUtf8Printable(path) : "not recorded");
   emit streamOpened(stream);
@@ -356,6 +421,10 @@ void WsServer::onBinaryMessage(const QByteArray& message)
   const auto slot = indexOf(frame.header.stream);
   // PROTOCOL.md §3: audio for an unopened stream is discarded, not fatal.
   if (!session_->opened[slot]) return;
+
+  // This stream is producing audio, so it is entitled to the long stall leash rather
+  // than the short one a stream that has never spoken gets.
+  session_->sawFrame[slot] = true;
 
   Core::samplesInto(frame, scratch_);
 
@@ -422,17 +491,7 @@ void WsServer::startTranscription(Core::Stream::Value stream)
   auto* client = new SttClient(cfg_.stt, stream, this);
   session_->stt[slot] = client;
   session_->lastResult[slot] = QDateTime::currentDateTimeUtc();
-
-  if (session_->stallWatch == nullptr)
-  {
-    // Parented to the server so it survives being deleted from inside its own slot,
-    // and stopped explicitly when the session ends. Left to the parent alone it would
-    // outlive every session that created one, and a long-running window would end up
-    // carrying a 2 s timer per start-and-stop cycle for the rest of its life.
-    session_->stallWatch = new QTimer(this);
-    connect(session_->stallWatch, &QTimer::timeout, this, &WsServer::checkForStalls);
-    session_->stallWatch->start(2000);
-  }
+  armStallWatch();
 
   // Which session this client belongs to. A replaced session leaves its old clients
   // still connected and still finalising whatever they had buffered, and without this
@@ -533,6 +592,21 @@ void WsServer::startTranscription(Core::Stream::Value stream)
   client->start();
 }
 
+void WsServer::armStallWatch()
+{
+  // Only when there is transcription to watch: with none, no stream can be behind and a
+  // 2 s timer would be pure overhead.
+  if (!cfg_.transcribe || session_ == nullptr || session_->stallWatch != nullptr) return;
+
+  // Parented to the server so it survives being deleted from inside its own slot,
+  // and stopped explicitly when the session ends. Left to the parent alone it would
+  // outlive every session that created one, and a long-running window would end up
+  // carrying a 2 s timer per start-and-stop cycle for the rest of its life.
+  session_->stallWatch = new QTimer(this);
+  connect(session_->stallWatch, &QTimer::timeout, this, &WsServer::checkForStalls);
+  session_->stallWatch->start(2000);
+}
+
 void WsServer::noteAlive(Core::Stream::Value stream)
 {
   if (!session_) return;
@@ -547,13 +621,18 @@ void WsServer::checkForStalls()
 
   const auto now = QDateTime::currentDateTimeUtc();
 
-  for (std::size_t slot = 0; slot < session_->stt.size(); ++slot)
+  for (std::size_t slot = 0; slot < session_->opened.size(); ++slot)
   {
-    if (session_->stt[slot] == nullptr || !session_->opened[slot]) continue;
+    // Judged on the stream being open, not on it having a transcription connection. A
+    // stream that has never sent a frame has no connection to judge — and it is exactly
+    // the case that used to freeze the whole transcript, because it held the watermark
+    // at zero and nothing here ever looked at it.
+    if (!session_->opened[slot]) continue;
 
     const auto quietFor = session_->lastResult[slot].msecsTo(now);
+    const auto limit    = session_->sawFrame[slot] ? kStallAfterMs : kSilentStreamMs;
 
-    if (quietFor > kStallAfterMs)
+    if (quietFor > limit)
     {
       // Well beyond anything normal: even a silent stream is finalised every few
       // seconds, so total quiet for this long means the connection is not working.
