@@ -93,28 +93,39 @@ std::vector<std::int16_t> readWav(const QString& path, QString& error)
                                        | (quint32(quint8(all[at+2])) << 16) | (quint32(quint8(all[at+3])) << 24); };
   auto readU16 = [&all](int at) { return quint16(quint8(all[at])) | (quint16(quint8(all[at+1])) << 8); };
 
-  int at = 12;
-  int dataAt = -1, dataLen = 0;
+  qint64 at = 12;
+  qint64 dataAt = -1, dataLen = 0;
   quint16 channels = 0, bits = 0;
   quint32 rate = 0;
 
+  // Chunk lengths are u32 and come out of the file, so they are attacker-controlled in
+  // exactly the way a frame header is. Read as `int` they went negative above 2^31: the
+  // cursor walked *backwards* out of the buffer and readU32 indexed past its start — an
+  // out-of-bounds read, found by AddressSanitizer as a SEGV at this line — while a data
+  // chunk declaring 0xFFFFFFF0 bytes reached std::vector as a length near 2^64 and threw
+  // std::length_error out of a constructor nothing catches. Widening to qint64 and
+  // bounding against the file's real size is what makes the walk terminate.
   while (at + 8 <= all.size())
   {
-    const QByteArray id = all.mid(at, 4);
-    const int len = int(readU32(at + 4));
-    const int body = at + 8;
+    const QByteArray id = all.mid(int(at), 4);
+    const qint64 len  = qint64(readU32(int(at) + 4));
+    const qint64 body = at + 8;
 
     if (id == "fmt " && body + 16 <= all.size())
     {
-      channels = readU16(body + 2);
-      rate     = readU32(body + 4);
-      bits     = readU16(body + 14);
+      channels = readU16(int(body) + 2);
+      rate     = readU32(int(body) + 4);
+      bits     = readU16(int(body) + 14);
     }
     else if (id == "data")
     {
       dataAt  = body;
-      dataLen = std::min(len, int(all.size()) - body);
+      dataLen = std::max<qint64>(0, std::min(len, all.size() - body));
     }
+
+    // A chunk that claims to run past the end of the file ends the walk: there is
+    // nothing after it to read, and trusting the length would step outside the buffer.
+    if (len > all.size() - body) break;
     at = body + len + (len & 1); // chunks are word-aligned
   }
 
@@ -132,7 +143,7 @@ std::vector<std::int16_t> readWav(const QString& path, QString& error)
 
   auto samples = std::vector<std::int16_t>(std::size_t(dataLen / 2));
   for (std::size_t ii = 0; ii < samples.size(); ++ii)
-    samples[ii] = std::int16_t(readU16(dataAt + int(ii) * 2));
+    samples[ii] = std::int16_t(readU16(int(dataAt) + int(ii) * 2));
 
   return samples;
 }
@@ -265,6 +276,7 @@ private:
     if (!cfg_.micFile.isEmpty()) out() << ", mic=" << cfg_.micFile;
     if (!cfg_.tabFile.isEmpty()) out() << ", meeting=" << cfg_.tabFile;
     if (cfg_.injectGap) out() << ", dropping meeting frames " << gapFrom_ << "-" << gapTo_;
+    if (cfg_.quietMeeting) out() << ", meeting stream open but silent";
     out() << Qt::endl;
 
     timer_.start(int(Core::kFrameMillis));
@@ -287,7 +299,7 @@ private:
       socket_.sendBinaryMessage(buildFrame(Core::Stream::Mic, index, kMicHertz));
 
     const bool inGap = cfg_.injectGap && sent_ >= gapFrom_ && sent_ < gapTo_;
-    if (!inGap)
+    if (!inGap && !cfg_.quietMeeting)
     {
       if (!tabAudio_.empty())
       {

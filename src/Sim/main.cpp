@@ -56,6 +56,12 @@ int main(int argc, char** argv)
                      "a conversation does."),
       QStringLiteral("n"), QStringLiteral("0"));
 
+  const auto quietMeetingOption = QCommandLineOption(
+      QStringLiteral("quiet-meeting"),
+      QStringLiteral("Open the meeting stream and send nothing on it — a tab capture "
+                     "that produced no audio. The microphone transcript must still be "
+                     "committed during the session rather than at the end of it."));
+
   parser.addOption(micOption);
   parser.addOption(meetingOption);
   parser.addOption(offsetOption);
@@ -63,6 +69,7 @@ int main(int argc, char** argv)
   parser.addOption(tokenOption);
   parser.addOption(secondsOption);
   parser.addOption(gapOption);
+  parser.addOption(quietMeetingOption);
   parser.process(app);
 
   bool       portOk = false;
@@ -82,6 +89,7 @@ int main(int argc, char** argv)
   cfg.micFile   = parser.value(micOption);
   cfg.tabFile   = parser.value(meetingOption);
   cfg.tabOffset = parser.value(offsetOption).toDouble();
+  cfg.quietMeeting = parser.isSet(quietMeetingOption);
 
   if (cfg.seconds <= 0.0)
   {

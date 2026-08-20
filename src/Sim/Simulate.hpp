@@ -35,6 +35,13 @@ struct SimulateConfig
   // Seconds to delay the meeting stream, so the two overlap the way a conversation
   // does rather than starting together.
   double tabOffset = 0.0;
+
+  // Opens the meeting stream and then sends nothing on it at all — a tab capture that
+  // yields no audio, or one whose track has already ended. The stream is open, so it
+  // counts towards the merge watermark, and it never speaks, so it can never advance
+  // it. Exists because that combination froze the whole transcript for the length of a
+  // call while the microphone was being transcribed perfectly.
+  bool quietMeeting = false;
 };
 
 int runSimulation(const SimulateConfig& cfg);
