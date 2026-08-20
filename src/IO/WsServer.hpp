@@ -31,9 +31,12 @@ struct ServerConfig
   std::uint16_t port = Core::kDefaultPort;
   QString       outputDir;
 
-  // Empty means "do not check". Both are documented in PROTOCOL.md §7 as guards
-  // against stray local software connecting by accident, not as a defence against a
-  // hostile process running as the same user.
+  // An empty token means "do not check", and an empty origin list means the opposite:
+  // no browser origin is accepted at all. That asymmetry is deliberate — the origin
+  // check is the security boundary of PROTOCOL.md §7, so failing closed is the only
+  // safe default — and it is stated here because an earlier version of this comment
+  // said empty meant "do not check" for both, which is how a caller that forgot to
+  // populate this field ended up locking the extension out.
   QString       token;
   QStringList   allowedOrigins;
 
@@ -44,8 +47,14 @@ struct ServerConfig
   bool      record = true;
 
   // Transcription follows the key: with one, audio is transcribed as well as
-  // recorded; without one, the app still records. --no-transcribe forces it off.
+  // recorded; without one, the app still records.
   bool      transcribe = false;
+
+  // Whether it is permitted at all. --no-transcribe clears this, and it must survive a
+  // settings change: the flag is a decision the user made about this run, and adding a
+  // key in the dialog is not a request to overturn it.
+  bool      transcribeAllowed = true;
+
   SttConfig stt;
 };
 
@@ -66,6 +75,12 @@ public:
   /// underneath would give one session two identities.
   void updateConfig(const ServerConfig& cfg);
 
+  /// What the server is running with. Callers that change one setting must start from
+  /// this rather than from a fresh ServerConfig, or every field they do not know about
+  /// silently reverts to its default — which is how saving the settings dialog once
+  /// emptied the origin allowlist and locked the extension out for the rest of the run.
+  const ServerConfig& config() const { return cfg_; }
+
 signals:
   /// Settled text, in conversational order. Emitted once per utterance.
   void utteranceCommitted(const Core::Utterance& utterance);
@@ -83,6 +98,12 @@ private:
   // a new connection replaces the old rather than being refused.
   struct Session
   {
+    // Identity that outlives the object. Callbacks and timers armed by one session can
+    // still fire after it has gone, and comparing the address would not tell them
+    // apart: the allocator is free to hand the same address to the next session, at
+    // which point a stale timer looks exactly like a live one.
+    std::uint64_t id = 0;
+
     QWebSocket* socket    = nullptr;
     bool        helloDone = false;
     QString     client;
@@ -92,11 +113,28 @@ private:
     std::array<Core::StreamRecorder, 2> recorders;
     std::array<bool, 2>                 opened = { false, false };
 
+    // How many times each stream has been opened on this connection. PROTOCOL.md §3
+    // allows a stream to be closed and opened again, and each open needs its own file:
+    // reusing the name would truncate what the previous one recorded.
+    std::array<int, 2>  opens    = { 0, 0 };
+    std::array<bool, 2> reported = { false, false };
+
+    // Said once per stream, not once per frame: a full disk fails 31 times a second.
+    std::array<bool, 2> reportedWriteFailure = { false, false };
+
     // Created with the stream, but only connected once the first frame arrives: the
     // engine measures time from the first audio it receives, so the offset onto the
     // shared capture clock is not known until then.
     std::array<SttClient*, 2> stt     = { nullptr, nullptr };
     std::array<bool, 2>       sttOpen = { false, false };
+
+    // Said once per outage rather than once per retry.
+    std::array<bool, 2> reportedInterruption = { false, false };
+
+    // A stream whose transcription exhausted its retries. Remembered on the session
+    // rather than on the client, because the client is gone by the time the next
+    // frame asks whether to build another.
+    std::array<bool, 2> sttGaveUp = { false, false };
 
     Core::TranscriptMerger transcript;
 
@@ -124,7 +162,8 @@ private:
   void handleStreamClose(const QJsonObject& msg);
   void handleBye        ();
 
-  void startTranscription(Core::Stream::Value stream, std::uint32_t firstSampleIndex);
+  void startTranscription(Core::Stream::Value stream);
+  void forwardToEngine(std::size_t slot, const Core::ParsedFrame& frame);
   void noteAlive(Core::Stream::Value stream);
   void checkForStalls();
 
@@ -139,7 +178,8 @@ private:
   void rejectWith(const char* code, std::uint16_t closeCode, const QString& detail);
   void closeSession();
   void finishSession();
-  void reportSession() const;
+  void reportSession();
+  void reportStream(std::size_t slot);
 
   bool tokenMatches(const QString& offered) const;
   static const char* streamKey(Core::Stream::Value stream);
@@ -147,6 +187,7 @@ private:
   ServerConfig             cfg_;
   QWebSocketServer         server_;
   std::unique_ptr<Session> session_;
+  std::uint64_t            nextSessionId_ = 0;
 
   // Reused across frames so a 31-per-second arrival rate allocates nothing.
   std::vector<std::int16_t> scratch_;

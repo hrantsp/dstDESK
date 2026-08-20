@@ -156,14 +156,20 @@ void MainWindow::openSettings()
   // Applied to the next session rather than the running one: the recorders and the
   // transcription connections were built from the values that were current when the
   // session opened, and swapping them underneath would give a session two identities.
-  auto cfg = IO::ServerConfig{};
-  cfg.port           = server_.port();
+  //
+  // Started from what the server is running with, not from a fresh ServerConfig. This
+  // dialog owns six settings; the config carries more than six. Building a new one and
+  // filling in the fields this dialog knows about silently reset the rest to their
+  // defaults — which emptied the origin allowlist, so the extension was refused for the
+  // rest of the run, and turned --no-record back on, so a user who had asked for no
+  // audio on disk got audio on disk. Neither said anything.
+  auto cfg = server_.config();
   cfg.outputDir      = settings_.outputDir;
   cfg.token          = settings_.token;
   cfg.stt.apiKey     = settings_.apiKey;
   cfg.stt.model      = settings_.model;
   cfg.stt.diarize    = settings_.diarize;
-  cfg.transcribe     = !settings_.apiKey.isEmpty();
+  cfg.transcribe     = cfg.transcribeAllowed && !settings_.apiKey.isEmpty();
   server_.updateConfig(cfg);
 
   transcribing_ = cfg.transcribe;

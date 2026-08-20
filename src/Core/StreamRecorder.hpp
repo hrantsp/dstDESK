@@ -32,6 +32,8 @@ public:
     std::uint64_t paddedSamples    = 0; // silence inserted to cover gaps
     std::uint32_t gaps             = 0;
     std::uint32_t rejected         = 0; // frames dropped as out of order
+    bool          writeFailed      = false; // the file stopped accepting audio
+    std::uint32_t resyncs          = 0;     // gaps too large to be real, not padded
     std::uint32_t firstSampleIndex = 0;
     std::uint32_t lastSampleIndex  = 0;
   };
@@ -88,12 +90,33 @@ public:
     if (header.sampleIndex > nextExpected_)
     {
       const std::uint32_t missing = header.sampleIndex - nextExpected_;
-      if (wav_.isOpen()) wav_.writeSilence(missing);
-      stats_.paddedSamples += missing;
-      ++stats_.gaps;
+
+      if (missing > maxPadSamples())
+      {
+        // sampleIndex is a u32 supplied by the client, and until this bound existed it
+        // was used directly as a write length: one 1036-byte frame declaring a position
+        // four billion samples ahead made the recorder write eight gigabytes of silence
+        // to disk, synchronously, with the event loop blocked for all of it. Measured,
+        // not imagined — 6.3 GB in two seconds before it was killed.
+        //
+        // No real gap looks like this. The client bounds its own buffer at about
+        // sixteen seconds of audio, so anything past thirty is a fault rather than a
+        // drop. Recording continues from the new position instead of stopping: the
+        // timeline has a step in it either way, and a recording that keeps going is
+        // worth more than one that ends at the first bad frame.
+        ++stats_.resyncs;
+        nextExpected_ = header.sampleIndex;
+      }
+      else
+      {
+        if (wav_.isOpen()) wav_.writeSilence(missing);
+        stats_.paddedSamples += missing;
+        ++stats_.gaps;
+      }
     }
 
     if (wav_.isOpen()) wav_.write(samples);
+    stats_.writeFailed      = wav_.failed();
     stats_.samples         += samples.size();
     stats_.lastSampleIndex  = header.sampleIndex;
     nextExpected_           = header.sampleIndex + header.frameSamples;
@@ -124,6 +147,14 @@ public:
   }
 
 private:
+  // The largest gap that will be padded rather than treated as a client fault. The
+  // sender bounds its own outbound buffer at roughly sixteen seconds of audio, so a
+  // genuine drop cannot exceed that by much; this leaves room and still refuses to turn
+  // one bad integer into an unbounded write. PROTOCOL.md §5.4.
+  static constexpr std::uint32_t kMaxPadSeconds = 30;
+
+  std::uint32_t maxPadSamples() const { return sampleRate_ * kMaxPadSeconds; }
+
   // Roughly one second of audio at the protocol's frame rate.
   static constexpr std::uint32_t kFlushEveryFrames = 32;
 

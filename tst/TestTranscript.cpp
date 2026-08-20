@@ -278,3 +278,43 @@ TEST_CASE("a long utterance does not provoke out-of-order commits", "[transcript
   CHECK(textsOf(merger.takeCommitted()) ==
         std::vector<std::string>{ "short one", "short two" });
 }
+
+TEST_CASE("a reopened stream resumes where it left off", "[transcript]")
+{
+  // PROTOCOL.md §3 allows a stream to be closed and opened again on one connection.
+  // Restarting its finalised position at zero would pull the watermark back to the
+  // start of the session, and nothing would commit again until this stream had
+  // re-covered the whole meeting — while the other stream kept producing text that
+  // could not be shown.
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+  merger.openStream(Stream::Tab);
+
+  merger.addFinal(Stream::Mic, 0.0, 30.0, "");
+  merger.addFinal(Stream::Tab, 0.0, 30.0, "");
+  CHECK(merger.watermark() == 30.0);
+
+  merger.closeStream(Stream::Mic);
+  merger.openStream(Stream::Mic);
+
+  // Not 0.0, which is what a naive reopen would report.
+  CHECK(merger.watermark() == 30.0);
+
+  merger.addFinal(Stream::Tab, 30.0, 40.0, "still going");
+  merger.addFinal(Stream::Mic, 30.0, 45.0, "");
+  CHECK(textsOf(merger.takeCommitted()) == std::vector<std::string>{ "still going" });
+}
+
+TEST_CASE("a stream opened for the first time starts at zero", "[transcript]")
+{
+  // The counterpart to the above: resuming applies to a reopen, not to a stream that
+  // has simply never spoken. A fresh stream must hold the watermark down until it has
+  // finalised something, or the other stream commits text it could still precede.
+  auto merger = TranscriptMerger{};
+  merger.openStream(Stream::Mic);
+  merger.openStream(Stream::Tab);
+
+  merger.addFinal(Stream::Tab, 0.0, 10.0, "one side only");
+  CHECK(merger.watermark() == 0.0);
+  CHECK(merger.takeCommitted().empty());
+}

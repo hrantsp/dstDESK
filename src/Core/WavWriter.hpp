@@ -30,6 +30,12 @@ public:
 
   bool isOpen() const { return file_.is_open(); }
 
+  /// True once a write has failed — a full disk, a removed drive, a quota. Recording is
+  /// the evidence layer this project judges its own frame handling by, so a recorder
+  /// that fails quietly is worse than one that does not record at all: the session
+  /// summary goes on reporting frames while nothing reaches the file.
+  bool failed() const { return failed_; }
+
   void write       (std::span<const std::int16_t> samples);
   void writeSilence(std::size_t samples);
 
@@ -55,6 +61,7 @@ private:
   std::uint32_t         sampleRate_     = 0;
   std::uint16_t         channels_       = 0;
   std::uint64_t         samplesWritten_ = 0;
+  bool                  failed_         = false;
 };
 
 } } } // namespace DST::DESK::Core

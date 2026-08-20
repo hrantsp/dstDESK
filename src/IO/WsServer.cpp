@@ -83,7 +83,8 @@ bool WsServer::start()
   }
 
   qInfo("Listening on ws://127.0.0.1:%u", server_.serverPort());
-  qInfo("Recording into %s", qUtf8Printable(QDir::toNativeSeparators(cfg_.outputDir)));
+  if (cfg_.record) qInfo("Recording into %s", qUtf8Printable(QDir::toNativeSeparators(cfg_.outputDir)));
+  else             qInfo("Not recording audio (--no-record); frame accounting is kept");
   // HP:TODO: no token by default. The origin check above is what actually keeps web
   // pages out; a token would additionally authenticate native clients, and belongs with
   // a way to provision it that is better than typing the same secret into two places.
@@ -146,6 +147,7 @@ void WsServer::onNewConnection()
   }
 
   session_ = std::make_unique<Session>();
+  session_->id     = ++nextSessionId_;
   session_->socket = socket;
 
   connect(socket, &QWebSocket::textMessageReceived,   this, &WsServer::onTextMessage);
@@ -247,7 +249,23 @@ void WsServer::handleStreamOpen(const QJsonObject& msg)
   const auto stream = static_cast<Core::Stream::Value>(raw);
   const auto slot   = indexOf(stream);
 
-  const QString path = QDir(session_->dir).filePath(QStringLiteral("%1.wav").arg(streamKey(stream)));
+  // A second open for a stream that is already open is a client fault, not an
+  // instruction to begin again. Acting on it would truncate the recording in progress
+  // and reset the accounting that describes it, so the session summary would report a
+  // clean run over audio that had just been destroyed.
+  if (session_->opened[slot])
+  {
+    qWarning("Ignoring stream-open for %s, which is already open", Core::Stream::label(stream));
+    return;
+  }
+
+  // PROTOCOL.md §3 allows a stream to be closed and opened again on one connection.
+  // Each open gets its own file: the second one wrote over the first for as long as
+  // the name was fixed, and reported the loss as a clean session.
+  const int     nth  = ++session_->opens[slot];
+  const QString name = nth == 1 ? QStringLiteral("%1.wav").arg(streamKey(stream))
+                                : QStringLiteral("%1-%2.wav").arg(streamKey(stream)).arg(nth);
+  const QString path = QDir(session_->dir).filePath(name);
 
   // toStdU16String, not toStdString. std::filesystem::path reads a narrow string in
   // the platform's native encoding, which on Windows is the active code page rather
@@ -260,11 +278,19 @@ void WsServer::handleStreamOpen(const QJsonObject& msg)
   }
   else if (!session_->recorders[slot].open(path.toStdU16String(), Core::kSampleRate))
   {
+    // Leaving the stream unopened discards its audio *and* skips transcription for it,
+    // so the window would read "Capturing" while doing neither. On a console this was a
+    // warning nobody sees; a double-clicked application had nowhere to put it at all.
     qWarning("Cannot open %s for writing", qUtf8Printable(path));
+    emit notice(tr("Cannot write %1 — the %2 stream is not being captured. "
+                   "Choose a writable folder in Settings, or start with --no-record.")
+                    .arg(QDir::toNativeSeparators(path),
+                         QString::fromLatin1(Core::Stream::label(stream))));
     return;
   }
 
-  session_->opened[slot] = true;
+  session_->opened[slot]   = true;
+  session_->reported[slot] = false;
   session_->transcript.openStream(stream);
   qInfo("Stream %s open -> %s", Core::Stream::label(stream),
         cfg_.record ? qUtf8Printable(path) : "not recorded");
@@ -281,6 +307,7 @@ void WsServer::handleStreamClose(const QJsonObject& msg)
 
   session_->recorders[slot].close();
   session_->opened[slot] = false;
+  reportStream(slot);
   // The merger is told the stream is closed only once the engine has finished with
   // it, not here. Closing it now would make addFinal discard the results still in
   // flight — which are precisely the last thing that was said.
@@ -314,21 +341,81 @@ void WsServer::onBinaryMessage(const QByteArray& message)
     return;
   }
 
+  // hello settled the frame size for this session and nothing after it did. Without
+  // this the handshake check is decoration: a client can declare 512 samples and then
+  // send a 65535-sample frame, which the parser accepts because its own length is
+  // self-consistent. PROTOCOL.md §5.3.
+  if (frame.header.frameSamples != Core::kFrameSamples)
+  {
+    rejectWith("malformed-frame", Core::kCloseMalformedFrame,
+               QStringLiteral("frame declares %1 samples, the session negotiated %2")
+                   .arg(frame.header.frameSamples).arg(Core::kFrameSamples));
+    return;
+  }
+
   const auto slot = indexOf(frame.header.stream);
   // PROTOCOL.md §3: audio for an unopened stream is discarded, not fatal.
   if (!session_->opened[slot]) return;
 
   Core::samplesInto(frame, scratch_);
-  session_->recorders[slot].accept(frame.header, scratch_);
 
-  if (cfg_.transcribe)
+  // A frame the recorder rejected went backwards on the shared clock. Forwarding it
+  // anyway would feed the engine audio it has already heard and shift every word
+  // timing after it — the same corruption gap padding exists to prevent, in the
+  // opposite direction.
+  if (!session_->recorders[slot].accept(frame.header, scratch_)) return;
+
+  // A recorder that has stopped accepting audio — a full disk, a removed drive, a
+  // quota — otherwise says nothing at all: frames keep arriving, the summary keeps
+  // counting them, and the file on disk stops growing. Recording is what this
+  // application shows for its work when there is no transcription key, so failing at it
+  // silently is the worst way it can fail.
+  if (session_->recorders[slot].stats().writeFailed && !session_->reportedWriteFailure[slot])
   {
-    if (session_->stt[slot] == nullptr) startTranscription(frame.header.stream, frame.header.sampleIndex);
-    if (session_->stt[slot] != nullptr) session_->stt[slot]->sendAudio(frame.payload);
+    session_->reportedWriteFailure[slot] = true;
+    const auto stream = static_cast<Core::Stream::Value>(slot);
+    qWarning("Recording failed for %s — the file stopped accepting audio",
+             Core::Stream::label(stream));
+    emit notice(tr("Recording stopped for %1 — the disk would not accept it. "
+                   "Transcription is unaffected.")
+                    .arg(QString::fromLatin1(Core::Stream::label(stream))));
   }
+
+  if (cfg_.transcribe) forwardToEngine(slot, frame);
 }
 
-void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firstSampleIndex)
+void WsServer::forwardToEngine(std::size_t slot, const Core::ParsedFrame& frame)
+{
+  auto*& client = session_->stt[slot];
+
+  // A client that was asked to finish and has finished means this stream was closed and
+  // opened again: its results are all in, and the new audio needs a connection of its
+  // own. One that gave up must not be replaced — it exhausted its retries, said so, and
+  // rebuilding it here would start that over on every frame.
+  if (client != nullptr && client->isFinished() && !client->gaveUp())
+  {
+    client->disconnect(this);
+    client->deleteLater();
+    client = nullptr;
+  }
+
+  if (client == nullptr)
+  {
+    if (session_->sttGaveUp[slot]) return;
+    startTranscription(frame.header.stream);
+    if (client == nullptr) return;
+  }
+
+  // The position on the shared clock travels with the audio. Everything that follows
+  // from it — the engine's time origin, silence for a gap, re-basing after a dropped
+  // connection — belongs to the client, because it is the only thing that knows which
+  // connection this audio is about to go to.
+  client->sendAudio(frame.payload,
+                    double(frame.header.sampleIndex) / double(Core::kSampleRate));
+}
+
+
+void WsServer::startTranscription(Core::Stream::Value stream)
 {
   const auto slot = indexOf(stream);
 
@@ -338,6 +425,10 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
 
   if (session_->stallWatch == nullptr)
   {
+    // Parented to the server so it survives being deleted from inside its own slot,
+    // and stopped explicitly when the session ends. Left to the parent alone it would
+    // outlive every session that created one, and a long-running window would end up
+    // carrying a 2 s timer per start-and-stop cycle for the rest of its life.
     session_->stallWatch = new QTimer(this);
     connect(session_->stallWatch, &QTimer::timeout, this, &WsServer::checkForStalls);
     session_->stallWatch->start(2000);
@@ -347,9 +438,12 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
   // still connected and still finalising whatever they had buffered, and without this
   // check that tail lands in the *new* session's transcript — stamped with the old
   // client's time origin, so it appears as a duplicate several seconds adrift.
-  auto* owner = session_.get();
+  //
+  // By id, not by address: a session freed and another allocated can land on the same
+  // address, and then a stale client passes the check.
+  const auto owner = session_->id;
 
-  const auto mine = [this, owner] { return session_ && session_.get() == owner; };
+  const auto mine = [this, owner] { return session_ && session_->id == owner; };
 
   connect(client, &SttClient::finalResult, this,
           [this, mine, stream](double start, double end, QString text, double confidence)
@@ -375,9 +469,48 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
     emit interimChanged(stream, text);
   });
 
+  connect(client, &SttClient::interrupted, this, [this, mine, stream](QString reason)
+  {
+    if (!mine()) return;
+
+    // Interrupted is not closed. The stream may speak again, so it keeps its place in
+    // the merger — but it must stop holding the watermark down while it is silent, or
+    // the other stream's transcript freezes for the length of the outage.
+    session_->transcript.setStalled(stream, true);
+    drainTranscript();
+
+    const auto slot = indexOf(stream);
+    if (!session_->reportedInterruption[slot])
+    {
+      session_->reportedInterruption[slot] = true;
+      emit notice(tr("Transcription for %1 dropped and is reconnecting — %2. "
+                     "Recording is unaffected.")
+                      .arg(QString::fromLatin1(Core::Stream::label(stream)), reason));
+    }
+  });
+
+  connect(client, &SttClient::resumed, this, [this, mine, stream](double lostSeconds)
+  {
+    if (!mine()) return;
+
+    session_->reportedInterruption[indexOf(stream)] = false;
+    qInfo("Transcription for %s resumed; %.1f s of audio was never transcribed",
+          Core::Stream::label(stream), lostSeconds);
+    emit notice(tr("Transcription for %1 resumed. About %2 s was not transcribed; the "
+                   "recording of it is intact.")
+                    .arg(QString::fromLatin1(Core::Stream::label(stream)))
+                    .arg(lostSeconds, 0, 'f', 1));
+  });
+
   connect(client, &SttClient::finished, this, [this, mine, stream]
   {
     if (!mine()) return;
+
+    // A stream whose transcription gave up must not be started again by the next frame
+    // to arrive, or it retries for the rest of the meeting.
+    const auto slot = indexOf(stream);
+    if (session_->stt[slot] != nullptr && session_->stt[slot]->gaveUp())
+      session_->sttGaveUp[slot] = true;
 
     // Now, and only now, can nothing further arrive for this stream. Releasing it
     // here also lets the watermark advance past it so the other stream can commit.
@@ -397,9 +530,7 @@ void WsServer::startTranscription(Core::Stream::Value stream, std::uint32_t firs
                     .arg(QString::fromLatin1(Core::Stream::label(stream)), reason));
   });
 
-  // The engine counts from the first audio it receives, so this frame's position on
-  // the shared capture clock is the offset for every time it later reports.
-  client->start(double(firstSampleIndex) / double(Core::kSampleRate));
+  client->start();
 }
 
 void WsServer::noteAlive(Core::Stream::Value stream)
@@ -468,24 +599,43 @@ void WsServer::rejectWith(const char* code, std::uint16_t closeCode, const QStri
   session_->socket->close(closeCodeOf(closeCode), QString::fromLatin1(code));
 }
 
-void WsServer::reportSession() const
+void WsServer::reportStream(std::size_t slot)
+{
+  if (!session_ || session_->reported[slot]) return;
+
+  const auto& rec   = session_->recorders[slot];
+  const auto& stats = rec.stats();
+  if (!stats.started) return;
+
+  // Reported when the stream closes, not only when the session does. A recorder's
+  // counters are reset by the next open, so a stream that is closed and opened again
+  // would otherwise have the first open's frames disappear from the summary — which
+  // reads as a clean short session rather than as half the audio going unaccounted for.
+  const auto nth = session_->opens[slot];
+  const auto name = nth > 1 ? QStringLiteral("%1 (%2)").arg(QLatin1String(streamKey(static_cast<Core::Stream::Value>(slot)))).arg(nth)
+                            : QString::fromLatin1(streamKey(static_cast<Core::Stream::Value>(slot)));
+
+  qInfo("  %-12s %6llu frames  %8.2f s  %u gaps (%llu padded samples)  %u rejected%s",
+        qUtf8Printable(name),
+        static_cast<unsigned long long>(stats.frames),
+        rec.durationSeconds(),
+        stats.gaps,
+        static_cast<unsigned long long>(stats.paddedSamples),
+        stats.rejected,
+        stats.writeFailed ? "  WRITE FAILED — the recording is incomplete" : "");
+
+  if (stats.resyncs > 0)
+    qWarning("  %-12s %u gap(s) too large to be real — not padded, so this recording's "
+             "timeline steps rather than running continuously",
+             qUtf8Printable(name), stats.resyncs);
+
+  session_->reported[slot] = true;
+}
+
+void WsServer::reportSession()
 {
   if (!session_) return;
-
-  for (std::size_t slot = 0; slot < session_->recorders.size(); ++slot)
-  {
-    const auto& rec   = session_->recorders[slot];
-    const auto& stats = rec.stats();
-    if (!stats.started) continue;
-
-    qInfo("  %-10s %6llu frames  %8.2f s  %u gaps (%llu padded samples)  %u rejected",
-          streamKey(static_cast<Core::Stream::Value>(slot)),
-          static_cast<unsigned long long>(stats.frames),
-          rec.durationSeconds(),
-          stats.gaps,
-          static_cast<unsigned long long>(stats.paddedSamples),
-          stats.rejected);
-  }
+  for (std::size_t slot = 0; slot < session_->recorders.size(); ++slot) reportStream(slot);
 }
 
 void WsServer::closeSession()
@@ -497,13 +647,21 @@ void WsServer::closeSession()
 
   // Ask each engine connection to finalise, then wait. Results for the last few
   // seconds of speech arrive after the request, so flushing now would discard them.
+  //
+  // Counted first, and over a copy of the pointers. finish() can answer synchronously:
+  // a connection that never came up has nothing to finalise, so it aborts and emits
+  // `finished` from inside this call. That handler decrements the count, and if the
+  // count is still being built it reaches zero early, calls finishSession(), and frees
+  // the session — while this loop is still walking an array inside it. That is a
+  // segfault on teardown, and the way to reach it is to stop capture before the
+  // transcription socket has connected: a wrong key, no network, or simply a short
+  // session. Both guards below are for the same reason.
+  const auto clients = session_->stt;
+  const auto owner   = session_->id;
+
   session_->sttAwaiting = 0;
-  for (auto* client : session_->stt)
-  {
-    if (client == nullptr || client->isFinished()) continue;
-    ++session_->sttAwaiting;
-    client->finish();
-  }
+  for (auto* client : clients)
+    if (client != nullptr && !client->isFinished()) ++session_->sttAwaiting;
 
   if (session_->sttAwaiting == 0)
   {
@@ -511,8 +669,25 @@ void WsServer::closeSession()
     return;
   }
 
+  for (auto* client : clients)
+  {
+    if (client == nullptr || client->isFinished()) continue;
+    client->finish();
+    if (!session_ || session_->id != owner) return; // finished synchronously; already gone
+  }
+
   // A connection that never answers must not strand the session forever.
-  QTimer::singleShot(5000, this, [this] { finishSession(); });
+  //
+  // Bound to the session that armed it. The usual case is that the engines answer in a
+  // few hundred milliseconds and this timer is left running with nothing to do — and
+  // five seconds later it would tear down whichever session existed by then. Stopping
+  // and starting capture again inside that window is entirely ordinary, and the second
+  // session died with nothing to explain it.
+  QTimer::singleShot(5000, this, [this, owner]
+  {
+    if (!session_ || session_->id != owner) return;
+    finishSession();
+  });
 }
 
 void WsServer::finishSession()
@@ -534,6 +709,15 @@ void WsServer::finishSession()
   // handshakes would otherwise make the window announce the end of something it never
   // reported the start of.
   if (session_->helloDone) emit sessionEnded();
+
+  // Same reason as the clients below: parented to the server, so nothing else would
+  // ever stop it.
+  if (session_->stallWatch != nullptr)
+  {
+    session_->stallWatch->stop();
+    session_->stallWatch->deleteLater();
+    session_->stallWatch = nullptr;
+  }
 
   // Parented to the server, so without this they would accumulate for its whole life,
   // each one still connected to the engine. Disconnected first because this may run

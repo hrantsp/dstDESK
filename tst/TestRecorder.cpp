@@ -168,3 +168,80 @@ TEST_CASE("a stream starting late does not pad from zero", "[recorder]")
   CHECK(rec.stats().firstSampleIndex == lateStart);
   CHECK(readAll(path).size()         == 44 + kFrameSamples * 2);
 }
+
+TEST_CASE("a healthy recording does not report a write failure", "[recorder]")
+{
+  // The guard on the guard. A write-failure flag that fires spuriously is worse than
+  // none: it puts "recording stopped" in front of a user whose recording is fine, and
+  // teaches them to ignore the next one that is real. The failing direction needs a
+  // filesystem that refuses writes and is exercised outside this suite; this is the
+  // half that must hold on every platform.
+  const auto path = tempWav("healthy.wav");
+
+  auto recorder = StreamRecorder{};
+  REQUIRE(recorder.open(path, kSampleRate));
+
+  const auto samples = std::vector<std::int16_t>(kFrameSamples, 1234);
+  for (std::uint32_t ii = 0; ii < 40; ++ii)
+  {
+    REQUIRE(recorder.accept(header(ii * kFrameSamples, kFrameSamples), samples));
+    CHECK_FALSE(recorder.stats().writeFailed);
+  }
+
+  recorder.close();
+  CHECK_FALSE(recorder.stats().writeFailed);
+  std::filesystem::remove(path);
+}
+
+TEST_CASE("a gap too large to be real is not padded", "[recorder]")
+{
+  // sampleIndex is a u32 that arrives from the client, and it used to be handed
+  // straight to the writer as a length. One frame claiming a position four billion
+  // samples ahead made the recorder write eight gigabytes of silence, synchronously,
+  // with the event loop blocked throughout — measured at 6.3 GB in two seconds.
+  const auto path = tempWav("huge-gap.wav");
+
+  auto recorder = StreamRecorder{};
+  REQUIRE(recorder.open(path, kSampleRate));
+
+  const auto samples = std::vector<std::int16_t>(kFrameSamples, 0);
+  REQUIRE(recorder.accept(header(0, kFrameSamples), samples));
+
+  // Well past the bound: four billion samples is about 69 hours of audio.
+  REQUIRE(recorder.accept(header(4000000000u, kFrameSamples), samples));
+
+  CHECK(recorder.stats().resyncs       == 1);
+  CHECK(recorder.stats().gaps          == 0);
+  CHECK(recorder.stats().paddedSamples == 0);
+
+  // Two frames of audio and nothing else — the header, and no silence at all.
+  recorder.close();
+  CHECK(readAll(path).size() == 44 + std::size_t(kFrameSamples) * 2 * 2);
+  std::filesystem::remove(path);
+}
+
+TEST_CASE("a gap a client could really produce is still padded", "[recorder]")
+{
+  // The other side of the bound. The sender caps its outbound buffer at roughly
+  // sixteen seconds of audio, so a drop of a few seconds is an ordinary event and must
+  // still be filled — otherwise everything after it sits earlier in the file than its
+  // sampleIndex says, which is exactly the drift padding exists to prevent.
+  const auto path = tempWav("real-gap.wav");
+
+  auto recorder = StreamRecorder{};
+  REQUIRE(recorder.open(path, kSampleRate));
+
+  const auto samples = std::vector<std::int16_t>(kFrameSamples, 0);
+  REQUIRE(recorder.accept(header(0, kFrameSamples), samples));
+
+  // Five seconds later: a plausible backpressure drop.
+  const std::uint32_t next = kSampleRate * 5;
+  REQUIRE(recorder.accept(header(next, kFrameSamples), samples));
+
+  CHECK(recorder.stats().resyncs       == 0);
+  CHECK(recorder.stats().gaps          == 1);
+  CHECK(recorder.stats().paddedSamples == next - kFrameSamples);
+
+  recorder.close();
+  std::filesystem::remove(path);
+}

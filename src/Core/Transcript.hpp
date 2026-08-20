@@ -36,9 +36,15 @@ struct Utterance
 class TranscriptMerger
 {
 public:
+  /// A stream reopened on the same connection resumes where it left off. Starting it
+  /// at zero again would drag the watermark back to the beginning of the session and
+  /// stop anything committing until this stream had caught up — while the other stream
+  /// kept producing text that could not be shown. PROTOCOL.md §3 allows a stream to be
+  /// closed and opened again, so this is a real path, not a hypothetical one.
   void openStream(Stream::Value stream)
   {
-    finalizedUpTo_[stream] = 0.0;
+    const auto prior = reopenAt_.find(stream);
+    finalizedUpTo_[stream] = prior == reopenAt_.end() ? 0.0 : prior->second;
     stalled_.erase(stream);
     live_.erase(stream);
   }
@@ -47,6 +53,9 @@ public:
   // nothing is ever committed again.
   void closeStream(Stream::Value stream)
   {
+    const auto it = finalizedUpTo_.find(stream);
+    if (it != finalizedUpTo_.end()) reopenAt_[stream] = it->second;
+
     finalizedUpTo_.erase(stream);
     stalled_.erase(stream);
     live_.erase(stream);
@@ -107,8 +116,16 @@ public:
   /// A stream whose transcription has died would otherwise hold the minimum down
   /// forever and the transcript would stop advancing while the other stream kept
   /// producing text — the worst failure this class can have, because it looks exactly
-  /// like the application being broken. Excluding a stalled stream avoids that without
-  /// weakening the ordering guarantee for streams that are actually working.
+  /// like the application being broken.
+  ///
+  /// Excluding a stalled stream is what avoids that, and it is not free: it is the one
+  /// case where the ordering guarantee below does not hold. While a stream is out of
+  /// the minimum the other commits past it, and if it then recovers and delivers a
+  /// final describing audio from before that point, the text is appended after lines
+  /// it should have preceded. The trade is deliberate — a transcript briefly out of
+  /// order is recoverable, a transcript frozen for the rest of the call is not — and
+  /// kStallAfterMs is set far above any working connection so it is reached only when
+  /// something is genuinely broken.
   double watermark() const
   {
     auto lowest = std::optional<double>{};
@@ -171,6 +188,7 @@ public:
 
 private:
   std::map<Stream::Value, double>    finalizedUpTo_;
+  std::map<Stream::Value, double>    reopenAt_; // survives close, so a reopen resumes
   std::set<Stream::Value>            stalled_;
   std::map<Stream::Value, Utterance> live_;
   std::vector<Utterance>             pending_;

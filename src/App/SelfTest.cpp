@@ -14,8 +14,12 @@
 namespace DST { namespace DESK { namespace App {
 namespace {
 
-CheckResult pass(QString name, QString detail                ) { return { std::move(name), true , std::move(detail),                {} }; }
-CheckResult fail(QString name, QString detail, QString remedy) { return { std::move(name), false, std::move(detail), std::move(remedy) }; }
+CheckResult pass(QString name, QString detail                ) { return { std::move(name), true , std::move(detail),                {}, true  }; }
+CheckResult fail(QString name, QString detail, QString remedy) { return { std::move(name), false, std::move(detail), std::move(remedy), true  }; }
+
+/// A failure that does not stop the application, because what it would have stopped is
+/// not switched on.
+CheckResult warn(QString name, QString detail, QString remedy) { return { std::move(name), false, std::move(detail), std::move(remedy), false }; }
 
 CheckResult checkQtRuntime()
 {
@@ -55,7 +59,7 @@ CheckResult checkWebSockets()
               QStringLiteral("bound ephemeral port %1").arg(port));
 }
 
-CheckResult checkTls()
+CheckResult checkTls(bool willTranscribe)
 {
   // The check this whole thing exists for. Qt's TLS support is a plugin that
   // dlopen()s OpenSSL by name; nothing at build time references it, so a machine
@@ -63,14 +67,24 @@ CheckResult checkTls()
   // first connection to the transcription provider.
   if (!QSslSocket::supportsSsl())
   {
-    return fail(QStringLiteral("TLS backend"),
-                QStringLiteral("no TLS backend could be loaded (built against %1)")
-                    .arg(QSslSocket::sslLibraryBuildVersionString()),
-                QStringLiteral("Qt bundles no OpenSSL and loads the system one at "
-                               "runtime. The OpenSSL that Conan provides must be on "
-                               "the library path — run the app through `conanrun` or "
-                               "the packaged launcher. See decision 12 in "
-                               "dstOMNI/DESIGN.md."));
+    // Only the transcription connection is wss://; the extension's link is plain
+    // ws:// on loopback. With transcription off, nothing on this machine will ever
+    // open a secure socket, and the recording half is unaffected.
+    const auto how = willTranscribe ? fail : warn;
+
+    auto remedy = QStringLiteral("Qt bundles no OpenSSL and loads the system one at "
+                                 "runtime. The OpenSSL that Conan provides must be on "
+                                 "the library path — run the app through `conanrun` or "
+                                 "the packaged launcher. See decision 12 in "
+                                 "dstOMNI/DESIGN.md.");
+    if (!willTranscribe)
+      remedy += QStringLiteral(" Only the transcription connection is wss://, and it is "
+                               "off, so nothing here stops the application recording.");
+
+    return how(QStringLiteral("TLS backend"),
+               QStringLiteral("no TLS backend could be loaded (built against %1)")
+                   .arg(QSslSocket::sslLibraryBuildVersionString()),
+               remedy);
   }
   return pass(QStringLiteral("TLS backend"),
               QStringLiteral("%1 (built against %2)")
@@ -97,13 +111,16 @@ CheckResult checkPort(std::uint16_t port)
               QStringLiteral("127.0.0.1:%1 is free").arg(port));
 }
 
-CheckResult checkOutputDir(const QString& dir)
+CheckResult checkOutputDir(const QString& dir, bool willRecord)
 {
+  // Nothing is written when --no-record is given, so an unwritable folder is a
+  // note rather than a reason to refuse to start.
+  const auto how = willRecord ? fail : warn;
   auto dd = QDir(dir);
 
   if (!dd.exists() && !dd.mkpath(QStringLiteral(".")))
   {
-    return fail(QStringLiteral("Output directory"),
+    return how(QStringLiteral("Output directory"),
                 QStringLiteral("cannot create %1").arg(dir),
                 QStringLiteral("Choose a writable location with --output."));
   }
@@ -113,7 +130,7 @@ CheckResult checkOutputDir(const QString& dir)
 
   if (!probe.open(QIODevice::WriteOnly))
   {
-    return fail(QStringLiteral("Output directory"),
+    return how(QStringLiteral("Output directory"),
                 QStringLiteral("%1 is not writable").arg(dir),
                 QStringLiteral("Choose a writable location with --output."));
   }
@@ -139,20 +156,23 @@ CheckResult reportProtocol()
 
 bool SelfTestReport::ok() const
 {
+  // Only blocking failures count. A warning is a thing worth saying, not a reason to
+  // refuse to do the work that does not depend on it.
   for (const auto& cc : checks)
-    if (!cc.passed) return false;
+    if (!cc.passed && cc.blocking) return false;
   return true;
 }
 
-SelfTestReport runSelfTest(std::uint16_t port, const QString& outputDir)
+SelfTestReport runSelfTest(std::uint16_t port, const QString& outputDir,
+                           SelfTestIntent intent)
 {
   auto report = SelfTestReport{};
   report.checks.push_back(reportProtocol());
   report.checks.push_back(checkQtRuntime());
   report.checks.push_back(checkWebSockets());
-  report.checks.push_back(checkTls());
+  report.checks.push_back(checkTls(intent.willTranscribe));
   report.checks.push_back(checkPort(port));
-  report.checks.push_back(checkOutputDir(outputDir));
+  report.checks.push_back(checkOutputDir(outputDir, intent.willRecord));
   return report;
 }
 
@@ -161,18 +181,35 @@ int printSelfTest(const SelfTestReport& report)
   auto out = QTextStream(stdout);
 
   for (const auto& cc : report.checks)
-    out << (cc.passed ? "  ok    " : "  FAIL  ") << cc.name.leftJustified(20) << cc.detail << Qt::endl;
+  {
+    const auto* mark = cc.passed ? "  ok    " : (cc.blocking ? "  FAIL  " : "  warn  ");
+    out << mark << cc.name.leftJustified(20) << cc.detail << Qt::endl;
+  }
   out << Qt::endl;
+
+  // Warnings are printed either way, so a machine that will not transcribe still says
+  // why rather than reporting a clean bill and failing later.
+  auto warnings = QList<CheckResult>{};
+  for (const auto& cc : report.checks)
+    if (!cc.passed && !cc.blocking) warnings.push_back(cc);
+
+  if (!warnings.isEmpty())
+  {
+    out << "Warnings — these do not stop the application:" << Qt::endl;
+    for (const auto& cc : warnings) out << "  " << cc.name << ": " << cc.remedy << Qt::endl;
+    out << Qt::endl;
+  }
 
   if (report.ok())
   {
-    out << "All checks passed." << Qt::endl;
+    out << (warnings.isEmpty() ? "All checks passed."
+                               : "Everything this run needs is present.") << Qt::endl;
     return 0;
   }
 
   out << "Failures:" << Qt::endl;
   for (const auto& cc : report.checks)
-    if (!cc.passed) out << "  " << cc.name << ": " << cc.remedy << Qt::endl;
+    if (!cc.passed && cc.blocking) out << "  " << cc.name << ": " << cc.remedy << Qt::endl;
   return 1;
 }
 

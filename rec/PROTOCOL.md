@@ -19,7 +19,7 @@ A single WebSocket connection carries everything.
 | | |
 |---|---|
 | Endpoint | `ws://127.0.0.1:<port>/` |
-| Default port | `8765`, overridden by `DST_WS_PORT` in the active target config |
+| Default port | `8765`, from `protocol.json`, and generated into both halves |
 | Server | `dstDESK` |
 | Client | `dstORCH`, connecting from its offscreen document |
 
@@ -102,7 +102,7 @@ Sent once, immediately after the socket opens.
 | Field | Type | Meaning |
 |---|---|---|
 | `protocol` | int | Protocol version. MUST be `1`. |
-| `token` | string | Shared secret from the target config. See §7. |
+| `token` | string | Shared secret, when the server is configured with one. Omitted otherwise, which is the default. See §7. |
 | `sampleRate` | int | Samples per second per stream. MUST be `16000` in version 1. |
 | `frameSamples` | int | Samples per audio frame. MUST be `512` in version 1. |
 | `contextEpochUtcMs` | number | UTC milliseconds corresponding to shared-clock zero. See §6. |
@@ -125,7 +125,7 @@ The client MUST NOT send audio before receiving `ready`.
 | `code` | Close code | Meaning |
 |---|---|---|
 | `protocol-version-mismatch` | 4001 | `hello.protocol` is not supported. |
-| `unauthorized-origin` | 4002 | `Origin` header not in the allowlist. |
+| `unauthorized-origin` | — | `Origin` header not in the allowlist. Settled during the HTTP upgrade, so there is no WebSocket to send an `error` on and no close code: the client sees the upgrade fail. Listed here because it is a rejection reason, not because it appears on the wire. |
 | `invalid-token` | 4002 | `hello.token` did not match. |
 | `unsupported-audio-format` | 4001 | `sampleRate` or `frameSamples` not supported. |
 | `malformed-frame` | 4003 | An audio frame failed the checks in §5.3. |
@@ -204,30 +204,76 @@ identified end to end. They are never mixed.
 
 ### 5.3 Receiver validation
 
-A server MUST reject a frame as `malformed-frame` if any of the following hold:
+Two classes of fault, treated differently. A frame that cannot be interpreted at all
+means the sender and receiver disagree about the format, and nothing further on the
+connection can be trusted. A frame that is well formed but arrives in the wrong place
+is a transport or client fault affecting that frame alone.
+
+**Fatal — the server MUST send `malformed-frame` and close** if any of these hold:
 
 - The message is shorter than 12 bytes.
 - `version` is not `1`.
-- `stream` has no corresponding open stream.
+- `stream` is outside the set defined in §5.2.
 - The message length is not exactly `12 + frameSamples * 2`.
+- `frameSamples` differs from the value agreed in `hello`. The handshake fixes the
+  frame size for the connection; a receiver that checks it only there has not fixed
+  anything, since a frame declaring any size is internally consistent.
+
+**Non-fatal — the server MUST discard the frame and continue**, counting it, if:
+
+- `stream` has no currently open stream. Opening and closing a stream mid-connection is
+  permitted (§3), so audio arriving either side of that window is expected rather than
+  exceptional.
 - `sampleIndex` is not greater than the `sampleIndex` of the previous frame on that
-  stream.
+  stream. The frame carries audio the receiver has already placed; replaying it would
+  shift everything after it. One duplicate is not a reason to end a call.
+
+The count of discarded frames MUST be reported in the session summary. A frame silently
+dropped is indistinguishable from one that never existed.
 
 ### 5.4 Gaps
 
 `sampleIndex` is authoritative for position; it is not required to be contiguous. A
 jump larger than the previous frame's `frameSamples` means audio was dropped upstream.
 
-On detecting a gap, the server SHOULD insert the equivalent duration of silence into
-the stream it forwards to the transcription engine. Timing then stays aligned with
-`sampleIndex`, and word timings returned by the engine remain usable for ordering.
+On detecting a gap, the server MUST insert the equivalent duration of silence into
+**both** the recorded stream and the stream it forwards to the transcription engine.
+
+The second of those is the one that matters and the easier to forget. A transcription
+engine times its results from the audio it has received, not from `sampleIndex`: hand it
+a stream with a hole simply closed up, and every word timing it returns afterwards is
+early by the length of what was lost — permanently, silently, and in exactly the
+quantity that ordering across two streams depends on being right.
+
+A server **MUST** bound the silence it will manufacture for a single gap, in both
+directions — the recording and the engine stream alike. `sampleIndex` is a `u32` that
+arrives from the client, and padding a gap means writing the difference; used unchecked
+it is a length under the sender's control. One 1036-byte frame declaring a position four
+billion samples ahead is eight gigabytes of silence, written synchronously.
+
+The bound must exceed any gap a correct client can produce. §5.5 caps the sender's own
+outbound buffer, so a genuine drop is bounded by that; anything far beyond it is a fault,
+not a drop. Version 1 uses thirty seconds against a sender buffer of roughly sixteen.
+
+On exceeding the bound the server MUST NOT pad. It MUST continue from the new position
+and MUST report that this stream's timeline now has a step in it, rather than presenting
+a recording that appears continuous or timings that appear aligned.
 
 ### 5.5 Backpressure
 
-The client SHOULD bound its outbound buffer. If the socket cannot keep up, it SHOULD
-drop the **oldest** unsent frames rather than grow without limit; `sampleIndex` makes
-the loss visible and recoverable at the receiver. Live transcription of recent audio
-matters more than completeness of old audio.
+The client SHOULD bound its outbound buffer rather than let it grow without limit.
+
+When the buffer is over its bound, the client SHOULD **discard newly captured frames
+until it drains**. The alternative — trimming the oldest unsent frames so the newest
+always go out — is better for a live transcript, because it drops stale audio rather
+than current audio, but a `WebSocket` send queue cannot be trimmed once written to; it
+requires the client to maintain its own queue and hand frames to the socket itself.
+Version 1 does not, and the difference only becomes visible on a link that cannot
+sustain 32 kB/s per stream, which loopback is not.
+
+Either way `sampleIndex` makes the loss visible at the receiver, and §5.4 requires the
+receiver to pad it back out, so a drop costs audio but not alignment. A client SHOULD
+report the number of frames it dropped when the session ends.
 
 ## 6. Timing model
 
@@ -262,24 +308,44 @@ Limits of this model:
   path may differ by tens of milliseconds. The protocol does not correct for this.
   Conversation ordering operates on utterances seconds apart, where such an offset is
   immaterial.
-- `sampleIndex` is a `u32`, which overflows after roughly 74 hours of continuous audio
-  at 16 kHz. A session reaching that duration MUST be treated as ended.
+- `sampleIndex` is a `u32`, so it wraps after 2^32 samples — about **74 hours** of
+  continuous capture at 16 kHz. That figure is not a chosen limit and cannot be raised
+  by editing a constant: it is the width of a field in §5.1, and changing it is a
+  protocol version bump that both halves must ship together.
+
+  Nothing needs it. The clock belongs to one `AudioContext`, which is created when
+  capture starts and closed when it stops, so the 74 hours is one unbroken capture
+  rather than an install lifetime. The WAV container gives out sooner anyway — RIFF
+  sizes are `u32`, so a recording passes 4 GB at about 37 hours.
+
+  Version 1 therefore does not handle the wrap. Past it every frame regresses against
+  the last and is discarded under §5.3, which stops that stream recording and
+  transcribing; the discarded count in the session summary is what shows it.
 
 ## 7. Security
 
-The server listens on a loopback port, which any local process can reach. Version 1
-applies two checks:
+The server listens on a loopback port, which any local process can reach.
 
-1. **Origin.** Chrome sends `Origin: chrome-extension://<id>` on the upgrade request.
-   The server MUST reject an upgrade whose `Origin` is not in the allowlist configured
-   for the active target.
-2. **Token.** `hello.token` MUST match the shared secret in the target config. The
-   comparison SHOULD be constant-time.
+1. **Origin — the boundary.** Chrome sends `Origin: chrome-extension://<id>` on the
+   upgrade request, and page script can neither forge nor suppress it. The server MUST
+   reject an upgrade whose `Origin` is present and not in its allowlist. This is what
+   the security of version 1 rests on: a WebSocket to loopback needs no CORS preflight,
+   so without it any page the user visits could open a socket to a running server,
+   displace the live session and stream its own audio in.
+
+   An upgrade carrying **no** `Origin` at all MUST be accepted. It cannot be a browser,
+   and a native process running as this user does not need a socket to do harm; refusing
+   it would only break the tools that make this protocol testable without a browser.
+
+2. **Token — optional, and off by default.** If the server is configured with a shared
+   secret, `hello.token` MUST match it and the comparison SHOULD be constant-time. There
+   is no default secret. A token authenticates native clients, which the paragraph above
+   argues is not the threat, and provisioning one means the same string typed in two
+   places — so it is offered rather than required.
 
 Neither check defends against a hostile process running as the same user, which could
-read the config. They exist to prevent unrelated local software and stray browser tabs
-from connecting by accident. Audio never leaves the machine except on the deliberate
-connection to the transcription provider.
+read the config. Audio never leaves the machine except on the deliberate connection to
+the transcription provider.
 
 ## 8. Reference constants
 

@@ -1,21 +1,40 @@
-// Drives a running kobayashi with clients that break the protocol on purpose.
+// Conformance checks for the server side of rec/PROTOCOL.md.
 //
-// The parsing rules are unit-tested against buffers in TestFrame.cpp, but that proves
-// only that the parser rejects them — not that the server closes the connection, sends
-// a diagnosable error, keeps its other state intact, and survives to serve the next
-// client. Those are properties of the whole program, and only a real socket shows them.
+// The unit suite tests the pieces; this tests the *contract* — that a malformed frame
+// is refused with the right code, that a merely misplaced one is discarded without
+// killing the connection, and that the server is still usable after all of it. It talks
+// to a real socket, so it exercises the handshake, the close codes and the framing
+// exactly as the extension would.
 //
-//   dstDESK/bin/Release/kobayashi --headless --port 8899 --output /tmp/abuse
+// It is the only thing that checks the MUSTs in §5.3 are actually implemented, so it
+// belongs in the build rather than in someone's memory: `dst.py test` starts a server
+// and runs it. To run it by hand against a server you already have:
+//
+//   dstDESK/bin/Release/kobayashi --headless --no-transcribe --port 8899 --output /tmp/abuse
 //   node dstDESK/tst/abuse.mjs --port 8899
 //
-// Exits non-zero if any case behaves other than specified in rec/PROTOCOL.md.
-
+// Exits non-zero if any case did not behave as the specification says.
 import { VERSION, SAMPLE_RATE, FRAME_SAMPLES, HEADER_BYTES, OFFSET, STREAM }
   from '../../dstORCH/src/generated/protocol.js';
 
-const port = Number(
-  (process.argv.find((a) => a.startsWith('--port=')) ?? '--port=8899').split('=')[1],
-);
+// Both `--port 8899` and `--port=8899`. Accepting only one form and reading the other
+// as NaN is how a wrong port turns into "the server refused everything" — which looks
+// exactly like the failure this file exists to detect.
+function portFrom(argv) {
+  const at = argv.indexOf('--port');
+  if (at >= 0 && argv[at + 1] !== undefined) return Number(argv[at + 1]);
+
+  const inline = argv.find((a) => a.startsWith('--port='));
+  if (inline !== undefined) return Number(inline.split('=')[1]);
+
+  return 8899;
+}
+
+const port = portFrom(process.argv.slice(2));
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  console.error(`Invalid --port: ${port}`);
+  process.exit(2);
+}
 
 let failures = 0;
 
@@ -186,6 +205,58 @@ console.log('\nAudio frames:');
   }, { expectClose: true });
   check('audio for an unopened stream is discarded, not fatal',
         r.code === null, `code=${r.code}`);
+}
+
+{
+  // PROTOCOL.md §5.3: hello fixes the frame size for the connection, so a later frame
+  // declaring a different one is fatal. Checking it only in the handshake fixes
+  // nothing — a frame of any size is internally consistent, and this one is 128 times
+  // the negotiated size.
+  const r = await converse((ws) => {
+    ws.send(hello());
+    setTimeout(() => {
+      ws.send(JSON.stringify({ type: 'stream-open', stream: STREAM.MIC, label: 'Microphone' }));
+      ws.send(frame({ stream: STREAM.MIC, samples: 65535 }));
+    }, 150);
+  });
+  check('a frame larger than the negotiated size is refused',
+        r.code === 'malformed-frame', `code=${r.code}`);
+}
+
+{
+  // PROTOCOL.md §5.3: a frame that goes backwards on the shared clock carries audio
+  // already placed. It is discarded and counted, and the connection survives — one
+  // duplicate is not a reason to end a call.
+  const r = await converse((ws) => {
+    ws.send(hello());
+    setTimeout(() => {
+      ws.send(JSON.stringify({ type: 'stream-open', stream: STREAM.MIC, label: 'Microphone' }));
+      ws.send(frame({ stream: STREAM.MIC, sampleIndex: SAMPLE_RATE * 2 }));
+      ws.send(frame({ stream: STREAM.MIC, sampleIndex: SAMPLE_RATE }));
+      ws.send(JSON.stringify({ type: 'bye' }));
+    }, 150);
+  });
+  check('a frame that goes backwards is discarded, not fatal',
+        r.code === null, `code=${r.code}`);
+}
+
+{
+  // PROTOCOL.md §3: a stream may be closed and opened again on one connection. The
+  // second open used to reuse the first one's filename and truncate it, and report the
+  // loss as a clean session.
+  const r = await converse((ws) => {
+    ws.send(hello());
+    setTimeout(() => {
+      const openMic = JSON.stringify({ type: 'stream-open', stream: STREAM.MIC, label: 'Microphone' });
+      ws.send(openMic);
+      ws.send(frame({ stream: STREAM.MIC, sampleIndex: SAMPLE_RATE }));
+      ws.send(JSON.stringify({ type: 'stream-close', stream: STREAM.MIC, reason: 'probe' }));
+      ws.send(openMic);
+      ws.send(frame({ stream: STREAM.MIC, sampleIndex: SAMPLE_RATE * 3 }));
+      ws.send(JSON.stringify({ type: 'bye' }));
+    }, 150);
+  });
+  check('a stream may be closed and opened again', r.code === null, `code=${r.code}`);
 }
 
 console.log('\nSurvival:');

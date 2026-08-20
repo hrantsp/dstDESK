@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <vector>
 #include "Endian.hpp"
 #include "WavWriter.hpp"
@@ -30,6 +32,7 @@ bool WavWriter::open(const std::filesystem::path& path, std::uint32_t sampleRate
   sampleRate_     = sampleRate;
   channels_       = channels;
   samplesWritten_ = 0;
+  failed_         = false;
 
   const std::uint32_t byteRate   = sampleRate * channels * (kBitsPerSample / 8);
   const std::uint16_t blockAlign = static_cast<std::uint16_t>(channels * (kBitsPerSample / 8));
@@ -54,7 +57,38 @@ bool WavWriter::open(const std::filesystem::path& path, std::uint32_t sampleRate
 void WavWriter::write(std::span<const std::int16_t> samples)
 {
   if (!file_ || samples.empty()) return;
-  for (const std::int16_t ss : samples) writeU16(file_, static_cast<std::uint16_t>(ss));
+
+  if constexpr (std::endian::native == std::endian::little)
+  {
+    // One write, not one per sample. The payload is already in the byte order RIFF
+    // wants, so this is the same bytes either way — but a frame is 512 samples arriving
+    // 31 times a second on each of two streams, and the previous version made about
+    // 32,000 ostream::write calls a second to move 64 kB.
+    file_.write(reinterpret_cast<const char*>(samples.data()),
+                static_cast<std::streamsize>(samples.size() * 2));
+  }
+  else
+  {
+    // Big-endian hosts byte-swap into a fixed buffer and write in blocks, so this stays
+    // allocation-free and still ends up as a handful of writes rather than thousands.
+    auto block = std::array<std::byte, 1024 * 2>{};
+
+    for (std::size_t at = 0; at < samples.size(); at += 1024)
+    {
+      const std::size_t nn = std::min<std::size_t>(1024, samples.size() - at);
+      for (std::size_t ii = 0; ii < nn; ++ii)
+        writeU16(block.data() + ii * 2, static_cast<std::uint16_t>(samples[at + ii]));
+
+      file_.write(reinterpret_cast<const char*>(block.data()),
+                  static_cast<std::streamsize>(nn * 2));
+      if (!file_) break;
+    }
+  }
+
+  // Counted only if it landed. samplesWritten_ is what patchSizes() declares in the
+  // header, so counting a failed write would produce a file claiming more audio than it
+  // holds — which is a corrupt recording rather than a short one.
+  if (!file_) { failed_ = true; return; }
   samplesWritten_ += samples.size();
 }
 
@@ -71,6 +105,7 @@ void WavWriter::writeSilence(std::size_t samples)
   {
     const std::size_t nn = std::min(remaining, kChunk);
     file_.write(zeros.data(), static_cast<std::streamsize>(nn * 2));
+    if (!file_) { failed_ = true; return; }
     remaining -= nn;
   }
   samplesWritten_ += samples;
@@ -99,6 +134,7 @@ bool WavWriter::flush()
   file_.seekp(resumeAt, std::ios::beg);
   file_.flush();
 
+  if (!file_) failed_ = true;
   return static_cast<bool>(file_);
 }
 
@@ -109,6 +145,7 @@ bool WavWriter::close()
   patchSizes();
 
   const bool ok = static_cast<bool>(file_);
+  if (!ok) failed_ = true;
   file_.close();
   return ok;
 }

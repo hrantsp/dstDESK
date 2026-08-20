@@ -197,6 +197,16 @@ int main(int argc, char** argv)
       QStringLiteral("model"), QStringLiteral("Transcription model."),
       QStringLiteral("name"), stored.model);
 
+  // Testing only, and the reason it exists is worth stating: without it the entire
+  // transcription and merge path can only be exercised against a paid third party, so
+  // the one part of this application that is hardest to get right is the one part with
+  // no test. A local mock speaking the same protocol closes that.
+  const auto sttEndpointOption = QCommandLineOption(
+      QStringLiteral("stt-endpoint"),
+      QStringLiteral("Transcription endpoint. For testing against a local mock; "
+                     "defaults to the live service."),
+      QStringLiteral("url"));
+
   const auto diarizeOption = QCommandLineOption(
       QStringLiteral("diarize"),
       QStringLiteral("Ask the engine to label speakers within the meeting stream. It "
@@ -218,6 +228,7 @@ int main(int argc, char** argv)
   parser.addOption(noRecordOption);
   parser.addOption(noTranscribeOption);
   parser.addOption(modelOption);
+  parser.addOption(sttEndpointOption);
   const auto headlessOption = QCommandLineOption(
       QStringLiteral("headless"),
       QStringLiteral("Run without a window, printing the transcript to the console."));
@@ -237,14 +248,22 @@ int main(int argc, char** argv)
 
   const QString outputDir = parser.value(outputOption);
 
+  // What this run will actually do, worked out before the environment is judged against
+  // it. A precondition of a feature that is switched off is a warning, not a refusal:
+  // the only wss:// in this application is the transcription connection, so a machine
+  // with no usable TLS can still record — and used to be stopped from doing so.
+  auto intent = DST::DESK::App::SelfTestIntent{};
+  intent.willRecord     = !parser.isSet(noRecordOption);
+  intent.willTranscribe = !stored.apiKey.isEmpty() && !parser.isSet(noTranscribeOption);
+
   if (parser.isSet(selfTestOption))
     return DST::DESK::App::printSelfTest(
-        DST::DESK::App::runSelfTest(static_cast<std::uint16_t>(port), outputDir));
+        DST::DESK::App::runSelfTest(static_cast<std::uint16_t>(port), outputDir, intent));
 
   // The self-test runs before serving too. Its checks are the ones that would
   // otherwise fail silently mid-session rather than at startup.
   const auto report =
-      DST::DESK::App::runSelfTest(static_cast<std::uint16_t>(port), outputDir);
+      DST::DESK::App::runSelfTest(static_cast<std::uint16_t>(port), outputDir, intent);
 
   if (!report.ok())
   {
@@ -291,7 +310,14 @@ int main(int argc, char** argv)
   cfg.stt.apiKey  = stored.apiKey;
   cfg.stt.model   = parser.value(modelOption);
   cfg.stt.diarize = parser.isSet(diarizeOption) || stored.diarize;
-  cfg.transcribe  = !cfg.stt.apiKey.isEmpty() && !parser.isSet(noTranscribeOption);
+  if (parser.isSet(sttEndpointOption))
+  {
+    cfg.stt.endpoint = QUrl(parser.value(sttEndpointOption));
+    QTextStream(stdout) << "Transcribing against " << cfg.stt.endpoint.toString()
+                        << " (not the live service)" << Qt::endl;
+  }
+  cfg.transcribeAllowed = !parser.isSet(noTranscribeOption);
+  cfg.transcribe        = cfg.transcribeAllowed && !cfg.stt.apiKey.isEmpty();
 
   const QString keyHint =
       parser.isSet(noTranscribeOption)

@@ -5,20 +5,71 @@
 // sometimes shortening them or changing their opening words, so anything shown before
 // it is final has to be visibly provisional or the transcript appears to contradict
 // itself. See decision 13 in dstOMNI/DESIGN.md.
+//
+// The committed zone is a model and a view, not a widget per line. The reason is
+// measured rather than assumed, and is recorded in decision 24: one QWidget and three
+// QLabels per utterance in a QVBoxLayout made every append re-solve heightForWidth over
+// the whole history, so the cost of a line grew with the number before it, and clearing
+// a search over a long meeting froze the window for seconds. A view renders the rows
+// that are on screen and nothing else.
 
 #ifndef DST_DESK_APP_TRANSCRIPTVIEW_HPP
 #define DST_DESK_APP_TRANSCRIPTVIEW_HPP
 
+#include <QHash>
 #include <QLabel>
-#include <QScrollArea>
-#include <QVBoxLayout>
+#include <QListView>
+#include <QStyledItemDelegate>
 #include <QWidget>
 #include <array>
 #include <optional>
-#include <vector>
 #include "Core/Transcript.hpp"
+#include "TranscriptModel.hpp"
 
 namespace DST { namespace DESK { namespace App {
+
+/// Draws one utterance: time, speaker, and word-wrapped text with search matches
+/// marked. Layout and measurement share one code path, so the height a row is given is
+/// the height it is drawn at.
+class UtteranceDelegate : public QStyledItemDelegate
+{
+public:
+  explicit UtteranceDelegate(QObject* parent = nullptr) : QStyledItemDelegate(parent) {}
+
+  /// Text wraps to the viewport, so every stored height is only valid for one width.
+  void setViewportWidth(int width);
+  void setSearch(const QString& needle);
+
+  QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override;
+  void  paint(QPainter* painter, const QStyleOptionViewItem& option,
+              const QModelIndex& index) const override;
+
+private:
+  // Laying text out is the expensive part and the answer never changes for a given row
+  // and width, so it is done once. Keyed on the row in the source model, which survives
+  // whatever filtering sits in between.
+  mutable QHash<int, int> heights_;
+
+  int     width_ = 0;
+  QString search_;
+};
+
+/// A QListView that keeps the delegate informed of its width. Without this the delegate
+/// measures against a stale width after every resize, and rows are given heights that
+/// do not match the text drawn into them.
+class TranscriptList : public QListView
+{
+  Q_OBJECT
+
+public:
+  TranscriptList(UtteranceDelegate* delegate, QWidget* parent = nullptr);
+
+protected:
+  void resizeEvent(QResizeEvent* event) override;
+
+private:
+  UtteranceDelegate* delegate_ = nullptr;
+};
 
 class TranscriptView : public QWidget
 {
@@ -43,33 +94,22 @@ signals:
   void countsChanged(int shown, int total);
 
 private:
-  struct Row
-  {
-    QWidget*            widget = nullptr;
-    QLabel*             text   = nullptr;
-    Core::Stream::Value stream = Core::Stream::Mic;
-    QString             plain;
-  };
-
   QWidget* buildLiveRow(Core::Stream::Value stream);
-  void     applyFilters();
-  bool     matches(const Row& row) const;
-  void     renderText(const Row& row) const;
+  void     updateCounts();
   void     scrollToEnd();
 
-  QScrollArea* scroll_      = nullptr;
-  QWidget*     committed_   = nullptr;
-  QVBoxLayout* rows_        = nullptr;
-  QLabel*      placeholder_ = nullptr;
+  TranscriptModel*   model_    = nullptr;
+  TranscriptFilter*  filter_   = nullptr;
+  UtteranceDelegate* delegate_ = nullptr;
+  TranscriptList*    list_     = nullptr;
 
-  std::vector<Row> entries_;
-
-  std::optional<Core::Stream::Value> streamFilter_;
-  QString                            search_;
-  QString                            emptyText_;
+  QLabel* placeholder_ = nullptr;
+  QString emptyText_;
 
   std::array<QLabel*, 2>  liveText_ = { nullptr, nullptr };
   std::array<QWidget*, 2> liveRow_  = { nullptr, nullptr };
+
+  std::optional<Core::Stream::Value> streamFilter_;
 
   // True while the view is scrolled to the bottom. Following new text is right until
   // the reader scrolls up to re-read something, at which point yanking them back down

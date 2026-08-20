@@ -15,3 +15,8 @@ unencrypted audio to disk; see decision 19 in [`dstOMNI/DESIGN.md`](https://gith
 
 Built and versioned by [`dstOMNI`](https://github.com/hrantsp/dstOMNI) — see that
 repository for the workspace layout and build instructions.
+
+The protocol this serves is specified in [`rec/PROTOCOL.md`](rec/PROTOCOL.md) and checked
+by `tst/abuse.mjs`, which drives a real socket with the frames a misbehaving client would
+send. `python3 dstOMNI/dst.py test` runs it, the unit suite and the browser wire check
+together.

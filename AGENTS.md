@@ -2,7 +2,7 @@
 
 `dstDESK` is the desktop half of the dual-stream transcription pipeline. It receives
 microphone and meeting audio as separate streams from the `dstORCH` browser extension,
-records them, and will transcribe and display them as a live conversation.
+records them, transcribes them, and displays them as a live conversation.
 
 It also **owns the wire protocol**. Changes here can break the extension, so treat
 `rec/` as a published interface rather than internal detail.
@@ -17,9 +17,17 @@ This guide applies to the whole repository.
   transcription client belongs here too.
 - `src/Sim/` — `kobayashi-sim`, a stand-in for the browser extension. A client of the
   protocol, not a feature of the application.
-- `src/App/` — `kobayashi`: command line, self-test, wiring.
-- `tst/` — unit tests. They link `kobayashi_core` and Catch2 only, so they run with no
-  event loop, no display, and no Qt libraries present.
+- `src/App/` — `kobayashi`: command line, self-test, wiring. The transcript is a
+  model, a filter proxy and a delegate; do not reintroduce a widget per utterance,
+  and see decision 24 for the measurements that settled it.
+- `tst/` — checks, of three kinds.
+  - `TestFrame`, `TestRecorder`, `TestTranscript` link `kobayashi_core` and Catch2 only,
+    so they run with no event loop, no display, and no Qt libraries present.
+  - `abuse.mjs` drives a real socket against a running server and is the only thing that
+    checks the MUSTs in `rec/PROTOCOL.md` §5.3 are implemented. A change to the wire
+    contract is not done until this passes.
+  - `BenchTranscript.cpp` guards a property rather than a behaviour: that appending to
+    the transcript does not get slower as the transcript grows. See decision 24.
 - `rec/` — the protocol source of truth, its generator, both specifications, and the
   Conan recipe for Qt.
 - `bin/`, `out/` — build tree and recordings. Both generated, both disposable.
@@ -51,6 +59,10 @@ ctest --preset conan-release
 
 `conan-debug` exists alongside `conan-release`. Both must be warning-free.
 
+`python3 dstOMNI/dst.py test` runs all three, plus the browser wire check — it starts a
+server of its own for the two that need one, so none of them depends on someone
+remembering to.
+
 End to end, without a browser:
 
 ```bash
@@ -61,6 +73,14 @@ End to end, without a browser:
 `kobayashi-sim` sends 440 Hz on the microphone stream and 660 Hz on the meeting stream, so
 the result is checkable by ear: one clean tone per file means capture and routing are
 correct.
+
+`kobayashi-mockstt` is a transcription service that drops connections on purpose, and
+`--stt-endpoint` points the application at it. This is how the reconnect and merge paths
+are exercised without a paid account; `dst.py test` runs two sessions against it.
+
+Anything touching `SttClient` or `TranscriptMerger` is not done until that passes — and a
+new check there is not done until it has been shown to **fail** with the fault it guards
+put back. Two of the three reconnect faults were of a kind no reading would have caught.
 
 ## Hard Contracts
 
@@ -80,6 +100,17 @@ is not misaligned.
 Changing the wire format means changing `rec/protocol.json` **and** `rec/PROTOCOL.md`
 together, and bumping `protocolVersion` if the change is not backward compatible.
 
+### Transcription owns its own clock
+
+`SttClient` maps engine time onto the shared capture clock, and nothing outside it should
+try to. Every chunk of audio is handed over with its position on that clock; gaps, and the
+re-basing a reconnection needs, are settled there. A new connection's origin is the front
+of whatever was buffered, not the next frame after it comes up — decision 25 has the
+measurement that distinguishes those.
+
+An unexpected drop marks the stream **stalled**, never closed: it may speak again, and
+closing it discards everything the replacement produces.
+
 ### The timing model
 
 `sampleIndex` is a position on a clock **shared by both streams**, taken from the
@@ -88,13 +119,19 @@ the same render pass. Cross-stream ordering is therefore an integer comparison w
 correction term.
 
 Do not reintroduce per-stream timing origins or wall-clock timestamps for ordering.
-The transcript merge will be built on this property.
+`Core/TranscriptMerger` is built on this property.
 
-### Gap padding is not cosmetic
+### Gap padding is not cosmetic, and it is bounded
 
 When frames are lost, `sampleIndex` jumps and `StreamRecorder` inserts the equivalent
-silence. Writing frames back to back after a loss would shift everything following it
-permanently, and the same shift would corrupt the word timings ordering depends on.
+silence — into the recording **and** into the stream forwarded to the engine. Writing
+frames back to back after a loss would shift everything following it permanently, and
+the same shift would corrupt the word timings ordering depends on.
+
+The padding is capped at thirty seconds per gap on both paths, and the cap is not
+optional. `sampleIndex` arrives from the client, and padding writes the difference: one
+frame claiming a position four billion samples ahead used to mean eight gigabytes of
+silence on disk. Past the cap, do not pad, continue from the new position, and say so.
 
 ### Recordings stay playable
 
@@ -154,10 +191,11 @@ Before claiming a change works, state:
   summary reported for frames, gaps and padded samples
 - anything not verified, and why
 
-Cross-platform status is honest rather than assumed: the code is portable by
-construction but has only ever been compiled and run on Linux. Windows and macOS
-remain unverified, with OpenSSL availability the known risk — `kobayashi --selftest`
-answers it in one run on each machine.
+Cross-platform status is recorded per platform in `dstOMNI/README.md`, and that table
+is the only place it is stated. Linux, Windows 10 and macOS on Apple silicon have each
+run the full pipeline on hardware. A claim about a platform belongs in that table with
+the run behind it, or nowhere — the same status written in two files is the same status
+until one of them stops being updated.
 
 ## Records And Generated Files
 

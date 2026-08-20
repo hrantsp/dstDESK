@@ -150,6 +150,7 @@ add_executable(kobayashi
     src/App/SelfTest.cpp
     src/App/MainWindow.cpp
     src/App/TranscriptView.cpp
+    src/App/TranscriptModel.cpp
     src/App/SettingsDialog.cpp
     src/IO/WsServer.cpp
     src/IO/SttClient.cpp)
@@ -289,6 +290,49 @@ if(KOBAYASHI_BUILD_TESTS)
 
     include(Catch)
     catch_discover_tests(kobayashi_tests)
+
+    # The transcript benchmark needs Qt and a view, so it cannot live in the suite
+    # above — that one links kobayashi_core alone precisely so it runs with no display
+    # and no Qt libraries present. This is a separate binary for that reason.
+    #
+    # It compiles the view's sources directly rather than linking the application:
+    # `kobayashi` is an executable, and turning it into a library to share two files
+    # would reshape the build for the benefit of a benchmark.
+    add_executable(kobayashi-bench
+        tst/BenchTranscript.cpp
+        src/App/TranscriptView.cpp
+        src/App/TranscriptModel.cpp)
+    target_include_directories(kobayashi-bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(kobayashi-bench PRIVATE kobayashi_core Qt6::Widgets)
+    if(MSVC)
+        target_compile_options(kobayashi-bench PRIVATE /W4)
+    else()
+        target_compile_options(kobayashi-bench PRIVATE -Wall -Wextra)
+    endif()
+
+    # The transcription service, made to misbehave. SttClient's reconnection only runs
+    # when a connection dies unexpectedly, and the live service will not do that on
+    # request — so without this the reconnect path could not be exercised at all, which
+    # is how three separate faults in it survived being written.
+    add_executable(kobayashi-mockstt tst/MockStt.cpp)
+    target_include_directories(kobayashi-mockstt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(kobayashi-mockstt PRIVATE kobayashi_core Qt6::Core Qt6::WebSockets)
+    add_dependencies(kobayashi-mockstt dst_protocol_generated)
+    if(MSVC)
+        target_compile_options(kobayashi-mockstt PRIVATE /W4)
+    else()
+        target_compile_options(kobayashi-mockstt PRIVATE -Wall -Wextra)
+    endif()
+
+    # Registered as a test because the property it guards is a correctness property, not
+    # a preference: a transcript view whose cost grows with the transcript stops keeping
+    # up during a long meeting. The assertion is on shape rather than milliseconds, so it
+    # does not depend on how fast the machine running it happens to be — see the comment
+    # at the top of BenchTranscript.cpp.
+    add_test(NAME transcript-scaling COMMAND kobayashi-bench --check)
+    set_tests_properties(transcript-scaling PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 300)
 endif()
 
 # ── Packaging ────────────────────────────────────────────────────────────────
