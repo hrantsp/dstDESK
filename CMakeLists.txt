@@ -178,8 +178,18 @@ if(APPLE)
     endforeach()
 endif()
 
+# Compiled explicitly rather than by CMAKE_AUTORCC.
+#
+# A .qrc listed as a source of a target does nothing unless AUTORCC is on, and CMake says
+# nothing about an unknown source type — so the flag was deleted by an unrelated edit,
+# every build after it silently shipped without the icon, and the window and taskbar had
+# nothing to show for six releases. This form names the file, generates the source, and
+# fails if it is missing. --selftest reports the resources too, so the same slip cannot
+# pass unnoticed again.
+qt_add_resources(KOBAYASHI_RESOURCES rec/icons/kobayashi.qrc)
+
 add_executable(kobayashi
-    rec/icons/kobayashi.qrc
+    ${KOBAYASHI_RESOURCES}
     src/App/main.cpp
     src/App/SelfTest.cpp
     src/App/MainWindow.cpp

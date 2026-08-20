@@ -39,6 +39,36 @@ CheckResult checkQtRuntime()
   return pass(QStringLiteral("Qt runtime"), running);
 }
 
+CheckResult checkIconResources()
+{
+  // Whether the icon is in the binary at all, which is not the same question as whether
+  // a desktop shows it. Explorer reads the .rc resource compiled into the executable;
+  // the window and the taskbar read this one, loaded at runtime — so the two fail
+  // independently and looking at a title bar cannot tell you which broke.
+  //
+  // QFile on a resource path needs no GUI, so this works under --selftest, which is a
+  // QCoreApplication with no display.
+  const auto sizes  = { 16, 32, 48, 64, 128, 256 };
+  auto       missing = QStringList{};
+
+  for (const auto size : sizes)
+  {
+    const auto path = QStringLiteral(":/kobayashi-%1.png").arg(size);
+    if (!QFile::exists(path)) missing << QString::number(size);
+  }
+
+  if (missing.isEmpty())
+    return pass(QStringLiteral("Icon resources"),
+                QStringLiteral("%1 sizes compiled in").arg(int(sizes.size())));
+
+  return warn(QStringLiteral("Icon resources"),
+              QStringLiteral("missing: %1").arg(missing.join(QStringLiteral(", "))),
+              QStringLiteral("The Qt resource did not compile into the binary, so the "
+                             "window and taskbar have no icon to show. Check that "
+                             "rec/icons/kobayashi.qrc is a source of the kobayashi "
+                             "target and that AUTORCC is on."));
+}
+
 CheckResult checkWebSockets()
 {
   // Proves the WebSockets module loaded and that a server can actually bind,
@@ -169,6 +199,7 @@ SelfTestReport runSelfTest(std::uint16_t port, const QString& outputDir,
   auto report = SelfTestReport{};
   report.checks.push_back(reportProtocol());
   report.checks.push_back(checkQtRuntime());
+  report.checks.push_back(checkIconResources());
   report.checks.push_back(checkWebSockets());
   report.checks.push_back(checkTls(intent.willTranscribe));
   report.checks.push_back(checkPort(port));
