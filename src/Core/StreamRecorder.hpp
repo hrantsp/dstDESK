@@ -91,7 +91,8 @@ public:
     {
       const std::uint32_t missing = header.sampleIndex - nextExpected_;
 
-      if (missing > maxPadSamples())
+      if (missing > maxPadSamples() ||
+          stats_.paddedSamples + missing > maxTotalPadSamples())
       {
         // sampleIndex is a u32 supplied by the client, and until this bound existed it
         // was used directly as a write length: one 1036-byte frame declaring a position
@@ -104,6 +105,9 @@ public:
         // drop. Recording continues from the new position instead of stopping: the
         // timeline has a step in it either way, and a recording that keeps going is
         // worth more than one that ends at the first bad frame.
+        //
+        // The second bound catches the same fault spread thin — a gap just under the
+        // first one, claimed on every frame. See maxTotalPadSamples().
         ++stats_.resyncs;
         nextExpected_ = header.sampleIndex;
       }
@@ -154,6 +158,24 @@ private:
   static constexpr std::uint32_t kMaxPadSeconds = 30;
 
   std::uint32_t maxPadSamples() const { return sampleRate_ * kMaxPadSeconds; }
+
+  /// The most silence this stream will manufacture in total.
+  ///
+  /// Bounding a single gap is not enough, and the reason is worth stating: the per-gap
+  /// bound is applied per frame and remembers nothing, so a client that claims a gap
+  /// just under it on *every* frame is padded in full every time. Sixty frames carrying
+  /// 1.92 s of real audio produced 1711 s of output and 53 MB on disk — the same fault
+  /// the per-gap bound exists to prevent, delivered at a rate instead of in one shot.
+  ///
+  /// One gap's allowance, plus one sample of silence for every sample actually
+  /// received. So the file can exceed the audio that produced it by a fixed amount and
+  /// then only by a factor of two, however the positions lie — while a real session,
+  /// where padding is a small fraction of a much larger amount of received audio, never
+  /// comes close to it.
+  std::uint64_t maxTotalPadSamples() const
+  {
+    return std::uint64_t(maxPadSamples()) + stats_.samples;
+  }
 
   // Roughly one second of audio at the protocol's frame rate.
   static constexpr std::uint32_t kFlushEveryFrames = 32;

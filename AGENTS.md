@@ -143,10 +143,13 @@ silence — into the recording **and** into the stream forwarded to the engine. 
 frames back to back after a loss would shift everything following it permanently, and
 the same shift would corrupt the word timings ordering depends on.
 
-The padding is capped at thirty seconds per gap on both paths, and the cap is not
-optional. `sampleIndex` arrives from the client, and padding writes the difference: one
-frame claiming a position four billion samples ahead used to mean eight gigabytes of
-silence on disk. Past the cap, do not pad, continue from the new position, and say so.
+The padding carries two bounds on both paths, and neither is optional. `sampleIndex`
+arrives from the client, and padding writes the difference: one frame claiming a position
+four billion samples ahead used to mean eight gigabytes of silence on disk, and a gap just
+under the per-gap bound claimed on *every* frame produced 53 MB from 1.92 s of audio. So a
+gap is bounded at thirty seconds, **and** total padding is bounded at one gap's allowance
+plus one sample per sample received. Past either, do not pad, continue from the new
+position, and say so. Decision 30.
 
 **The cap binds one frame and not one second, and that is a known limit rather than a
 design.** It is applied per call and remembers nothing, so a client asking for a large gap

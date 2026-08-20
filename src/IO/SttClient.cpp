@@ -87,6 +87,12 @@ void SttClient::openSocket()
   // connection's clock will start.
   needOrigin_ = true;
 
+  // The padding budget belongs to a connection, not to the client: a new socket is a new
+  // upload, and carrying a spent budget across would leave a reconnected stream unable to
+  // cover the first drop after it.
+  padded_ = 0.0;
+  sent_   = 0.0;
+
   auto request = QNetworkRequest(buildUrl());
   request.setRawHeader("Authorization", QStringLiteral("Token %1").arg(cfg_.apiKey).toUtf8());
 
@@ -127,7 +133,7 @@ void SttClient::padTo(double positionSeconds)
   const double missing = positionSeconds - expected_;
   if (missing <= 0.0) return;
 
-  if (missing > kMaxPadSeconds)
+  if (missing > kMaxPadSeconds || padded_ + missing > maxTotalPadSeconds())
   {
     // Beyond anything a lost frame explains. Re-base instead of manufacturing minutes
     // of silence: the position arrives from the client, and padding writes the
@@ -150,6 +156,7 @@ void SttClient::padTo(double positionSeconds)
     socket_.sendBinaryMessage(QByteArray(kSilence.constData(), chunk * 2));
     remaining -= chunk;
   }
+  padded_  += missing;
   expected_ = positionSeconds;
 }
 
@@ -194,6 +201,7 @@ void SttClient::sendAudio(std::span<const std::byte> pcm, double positionSeconds
   }
 
   socket_.sendBinaryMessage(bytes);
+  sent_    += seconds;
   expected_ = positionSeconds + seconds;
 }
 

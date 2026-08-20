@@ -245,3 +245,40 @@ TEST_CASE("a gap a client could really produce is still padded", "[recorder]")
   recorder.close();
   std::filesystem::remove(path);
 }
+
+TEST_CASE("padding is bounded in total, not only per gap", "[recorder]")
+{
+  // Bounding one gap is not enough. The per-gap bound is applied per frame and remembers
+  // nothing, so a client claiming a gap just under it on *every* frame is padded in full
+  // every time: sixty frames carrying 1.92 s of real audio produced 1711 s of output and
+  // 53 MB on disk. The same fault the per-gap bound exists to prevent, at a rate.
+  const auto path = tempWav("total-pad.wav");
+
+  auto recorder = StreamRecorder{};
+  REQUIRE(recorder.open(path, kSampleRate));
+
+  const auto samples = std::vector<std::int16_t>(kFrameSamples, 0);
+
+  // Every frame claims a position 29 s beyond the last — under the 30 s per-gap bound,
+  // so every one of them used to be padded in full.
+  std::uint32_t index = 0;
+  for (int ii = 0; ii < 60; ++ii)
+  {
+    REQUIRE(recorder.accept(header(index, kFrameSamples), samples));
+    index += kSampleRate * 29;
+  }
+
+  const auto& stats = recorder.stats();
+
+  // The bound is one gap's allowance plus one sample of silence per sample received, so
+  // the file may exceed its audio by a fixed amount and then only by a factor of two.
+  const std::uint64_t allowance = std::uint64_t(kSampleRate) * 30 + stats.samples;
+  CHECK(stats.paddedSamples <= allowance);
+  CHECK(stats.resyncs > 0); // and the ones it refused are reported, not silent
+
+  // Concretely: nowhere near the 27,345,792 padded samples this used to produce.
+  CHECK(stats.paddedSamples < 1000000);
+
+  recorder.close();
+  std::filesystem::remove(path);
+}

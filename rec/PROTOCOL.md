@@ -255,6 +255,12 @@ The bound must exceed any gap a correct client can produce. §5.5 caps the sende
 outbound buffer, so a genuine drop is bounded by that; anything far beyond it is a fault,
 not a drop. Version 1 uses thirty seconds against a sender buffer of roughly sixteen.
 
+A per-gap bound alone bounds nothing, and a server MUST carry a cumulative one as well: a
+client claiming a gap just under the per-gap bound on every frame is otherwise padded in
+full on every frame. Version 1 allows one gap's worth plus one sample of silence for every
+sample actually received, so output is bounded at about twice input plus a constant
+however the declared positions behave.
+
 On exceeding the bound the server MUST NOT pad. It MUST continue from the new position
 and MUST report that this stream's timeline now has a step in it, rather than presenting
 a recording that appears continuous or timings that appear aligned.

@@ -156,6 +156,19 @@ private:
   // padding writes the difference. See PROTOCOL.md §5.4.
   static constexpr double kMaxPadSeconds = 30.0;
 
+  // And the most silence this connection will manufacture in total, because bounding one
+  // gap is not enough: the per-gap bound is applied per frame and remembers nothing, so a
+  // gap claimed just under it on every frame is padded in full every time. Measured on
+  // the recording side, sixty frames of real audio produced 1711 s of output — and this
+  // path sends that to a service billed by the minute.
+  //
+  // One gap's allowance plus one second of silence per second of real audio sent, so the
+  // upload is bounded at about twice the audio plus a constant however the positions lie.
+  double maxTotalPadSeconds() const { return kMaxPadSeconds + sent_; }
+
+  double padded_ = 0.0; // seconds of silence manufactured on this connection
+  double sent_   = 0.0; // seconds of real audio forwarded on this connection
+
   // Audio that arrived before the connection was ready. Establishing it takes a few
   // hundred milliseconds, and discarding that audio would clip the first words of a
   // session — exactly the part someone is most likely to be listening for.
