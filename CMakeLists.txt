@@ -7,6 +7,40 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(KOBAYASHI_BUILD_TESTS "Build the unit tests" ON)
 
+# ── Sanitizers ───────────────────────────────────────────────────────────────
+# An option rather than a build type, because this is not a different product: it is
+# the same code with the compiler told to check what it cannot check for free.
+#
+# It exists because this project had no way to ask the question. Exactly one memory
+# fault was ever found here, and it was found by a crash on a user's machine rather
+# than by a tool — while an out-of-bounds read in the WAV reader and an unbounded
+# allocation beside it sat in a shipped binary, both of which AddressSanitizer names in
+# under a second. A build system that owns its own toolchain (decision 11) and cannot
+# turn this on has not finished owning it.
+#
+# Directory scope, so it reaches every target below without each one having to remember.
+# -fno-sanitize-recover makes undefined behaviour fail the run rather than print and
+# continue: a report nobody notices is the same as no report.
+#
+# UBSan's vptr check is off. It needs RTTI for every polymorphic type it sees, including
+# those inside a Qt that was not built with it, and reports the missing information as a
+# fault — so leaving it on trades real findings for noise about someone else's library.
+option(KOBAYASHI_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(KOBAYASHI_SANITIZE)
+    if(MSVC)
+        # MSVC ships AddressSanitizer only; there is no UBSan, and /RTC is incompatible
+        # with it. Saying so is better than silently giving half of what was asked for.
+        message(STATUS "Sanitizers: AddressSanitizer (MSVC has no UndefinedBehaviorSanitizer)")
+        add_compile_options(/fsanitize=address)
+    else()
+        message(STATUS "Sanitizers: AddressSanitizer + UndefinedBehaviorSanitizer")
+        add_compile_options(-fsanitize=address,undefined -fno-sanitize=vptr
+                            -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=address,undefined)
+    endif()
+endif()
+
 # ── Generated protocol constants ─────────────────────────────────────────────
 # dstDESK/rec/protocol.json is the single source of truth for both halves of
 # the pipeline. The header below and dstORCH's protocol.js are generated from it;
