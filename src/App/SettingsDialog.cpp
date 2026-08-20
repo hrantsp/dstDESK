@@ -43,8 +43,11 @@ SettingsDialog::SettingsDialog(const Settings& current, std::uint16_t boundPort,
   model_ = new QLineEdit(current.model);
   diarize_ = new QCheckBox(tr("Label speakers within the meeting stream"));
   diarize_->setChecked(current.diarize);
-  diarize_->setToolTip(tr("Separates distinct voices well and similar ones poorly, so it "
-                          "refines the transcript rather than defining it."));
+  // Says plainly that it does nothing yet. A control that claims a capability it does
+  // not have is worse than one that is absent, and the honest label costs nothing.
+  diarize_->setToolTip(tr("Not working yet: the engine is asked to label the voices in the "
+                          "meeting stream, but the labels it returns are not read or shown, "
+                          "so this changes nothing you can see. Known issue."));
 
   auto* form = new QFormLayout;
   form->addRow(tr("Port"), port_);

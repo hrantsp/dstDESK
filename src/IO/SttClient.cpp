@@ -65,6 +65,11 @@ QUrl SttClient::buildUrl() const
   query.addQueryItem(QStringLiteral("punctuate"),       QStringLiteral("true"));
   query.addQueryItem(QStringLiteral("smart_format"),    QStringLiteral("true"));
 
+  // HP:TODO: this is requested and then ignored. With diarisation on, every word in the
+  // response carries a speaker index, and onTextMessage reads only the transcript text and
+  // the confidences — so the option costs a query parameter and changes nothing visible.
+  // Finishing it means carrying the index on Utterance and showing it beside the meeting
+  // label. Recorded as a known limit rather than quietly left; decision 14 has the state.
   if (cfg_.diarize) query.addQueryItem(QStringLiteral("diarize"), QStringLiteral("true"));
 
   url.setQuery(query);

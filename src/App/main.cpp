@@ -209,9 +209,9 @@ int main(int argc, char** argv)
 
   const auto diarizeOption = QCommandLineOption(
       QStringLiteral("diarize"),
-      QStringLiteral("Ask the engine to label speakers within the meeting stream. It "
-                     "separates distinct voices well and similar ones poorly, so it "
-                     "refines the transcript rather than defining it."));
+      QStringLiteral("Ask the engine to label speakers within the meeting stream. Known "
+                     "issue: the labels are requested but not read, so this currently "
+                     "changes nothing in the transcript."));
 
   const auto originOption = QCommandLineOption(
       QStringLiteral("origin"),
