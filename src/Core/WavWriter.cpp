@@ -113,6 +113,10 @@ void WavWriter::writeSilence(std::size_t samples)
 
 void WavWriter::patchSizes()
 {
+  // HP:TODO: RIFF sizes are u32, so this truncates past 4 GB — about 37 hours of 16 kHz
+  // mono, and the point at which the header stops describing the file. Not guarded
+  // because no meeting reaches it and the fix is a different container (RF64 or WAV64),
+  // not a check. Listed under "Known limits" in dstOMNI/README.md.
   const std::uint64_t dataBytes = samplesWritten_ * 2;
 
   file_.seekp(kDataSizeOffset, std::ios::beg);

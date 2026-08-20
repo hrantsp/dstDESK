@@ -309,18 +309,24 @@ Limits of this model:
   Conversation ordering operates on utterances seconds apart, where such an offset is
   immaterial.
 - `sampleIndex` is a `u32`, so it wraps after 2^32 samples — about **74 hours** of
-  continuous capture at 16 kHz. That figure is not a chosen limit and cannot be raised
-  by editing a constant: it is the width of a field in §5.1, and changing it is a
-  protocol version bump that both halves must ship together.
+  continuous capture at 16 kHz. That figure is not a chosen limit and cannot be raised by
+  editing a constant: it is the width of a field in §5.1, and changing it is a protocol
+  version bump that both halves must ship together.
 
-  Nothing needs it. The clock belongs to one `AudioContext`, which is created when
-  capture starts and closed when it stops, so the 74 hours is one unbroken capture
-  rather than an install lifetime. The WAV container gives out sooner anyway — RIFF
-  sizes are `u32`, so a recording passes 4 GB at about 37 hours.
+  The clock belongs to one `AudioContext`, created when capture starts and closed when it
+  stops, so the 74 hours is one unbroken capture rather than an install lifetime.
 
-  Version 1 therefore does not handle the wrap. Past it every frame regresses against
-  the last and is discarded under §5.3, which stops that stream recording and
-  transcribing; the discarded count in the session summary is what shows it.
+  **Version 1 does not handle the wrap, and this is a known limit rather than a defended
+  design.** Past it, every frame regresses against the last and is discarded under §5.3,
+  which stops that stream recording and being transcribed. The discarded count in the
+  session summary is the only thing that shows it; nothing raises a notice, because the
+  condition cannot be reached by any meeting. A receiver that needed to survive it would
+  carry a wrap counter alongside `sampleIndex` and add it before comparing — which puts
+  state into the one field the whole timing model reads, and is why it has not been done.
+
+  A recording gives out sooner in any case: RIFF sizes are `u32`, so a WAV passes 4 GB at
+  about **37 hours** and its declared length stops matching its contents. Both limits are
+  listed, with what would change them, in `dstOMNI/README.md` under *Known limits*.
 
 ## 7. Security
 
